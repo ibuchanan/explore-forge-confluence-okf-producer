@@ -1,0 +1,20 @@
+modules:
+  confluence:globalSettings:
+    - key: explore-forge-confluence-okf-producer-hello-world-global-settings
+      resource: main
+      render: native
+      resolver:
+        function: resolver
+      title: explore-forge-confluence-okf-producer
+  function:
+    - key: resolver
+      handler: index.handler
+resources:
+  - key: main
+    path: src/frontend/index.jsx
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/f3a85c41-fda5-48d5-8d89-36c052ca782e
