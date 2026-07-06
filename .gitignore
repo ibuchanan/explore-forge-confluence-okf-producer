@@ -50,3 +50,5 @@ Thumbs.db
 
 
 /.forge/
+# CocoIndex Code (ccc)
+/.cocoindex_code/

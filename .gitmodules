@@ -1,0 +1,6 @@
+[submodule "specs/references/explore-forge-config-lifecycle"]
+	path = specs/references/explore-forge-config-lifecycle
+	url = https://github.com/ibuchanan/explore-forge-config-lifecycle
+[submodule "specs/references/knowledge-catalog"]
+	path = specs/references/knowledge-catalog
+	url = https://github.com/GoogleCloudPlatform/knowledge-catalog.git
