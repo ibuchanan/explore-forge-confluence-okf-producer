@@ -11,7 +11,7 @@ modules:
       handler: index.handler
 resources:
   - key: main
-    path: src/frontend/index.jsx
+    path: src/frontend/index.tsx
 app:
   runtime:
     name: nodejs24.x
