@@ -1,20 +1,62 @@
 {
-  "name": "confluence-global-settings-ui-kit",
-  "version": "1.1.44-next.8",
-  "main": "index.js",
-  "license": "MIT",
+  "name": "explore-forge-confluence-okf-producer",
+  "version": "0.0.0",
   "private": true,
-  "scripts": {
-    "lint": "eslint src/**/*"
+  "license": "Apache-2.0",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
   },
-  "devDependencies": {
-    "eslint": "^8.56.0",
-    "eslint-plugin-react-hooks": "^4.6.0"
+  "scripts": {
+    "build": "tsc",
+    "changelog": "git cliff",
+    "check": "npm run lint && npm run format:check && npm run typecheck",
+    "clean": "rm -rf ./node_modules && rm package-lock.json && rm -rf ./dist",
+    "dev": "tsdown --watch",
+    "forge:deploy": "source .env && forge deploy --environment \"$FORGE_ENVIRONMENT\"",
+    "forge:install": "source .env && forge install --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
+    "forge:uninstall": "source .env && forge uninstall --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\"",
+    "forge:upgrade": "source .env && forge install --upgrade --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
+    "forge:variables:set": "source .env && forge variables set --environment \"$FORGE_ENVIRONMENT\"",
+    "forge:variables:set-encrypted": "source .env && forge variables set --encrypt --environment \"$FORGE_ENVIRONMENT\"",
+    "forge:variables:set:dotenv": "./scripts/forge-vars-from-env.sh",
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "generate": "npm run generate:openapi && npm run generate:rovo",
+    "generate:openapi": "openapi-typescript",
+    "generate:rovo": "echo 'Not implemented'",
+    "lint": "npm run lint:check && forge lint",
+    "lint:check": "biome lint",
+    "lint:fix": "biome lint --write",
+    "lint:prelint": "ast-grep scan --globs '!specs/**' --config ./node_modules/tool-forge-prelint-ast-grep/sgconfig.recommended.yml",
+    "prepare": "echo 'Not implemented'",
+    "preview": "echo 'Not implemented'",
+    "start": "echo 'Not implemented'",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest watch",
+    "todo": "grep -rn 'TODO' --exclude='package.json' . --color=auto || echo 'No TODOs found!'",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@forge/bridge": "6.1.0-next.8",
-    "@forge/react": "12.0.1-next.1",
-    "@forge/resolver": "2.0.0",
-    "react": "^18.2.0"
+    "@forge/bridge": "6.1",
+    "@forge/react": "12.0",
+    "@forge/resolver": "2.0",
+    "react": "^18.2"
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "^0.44",
+    "@biomejs/biome": "2.5.2",
+    "@types/node": "*",
+    "archunit": "*",
+    "git-cliff": "*",
+    "openapi-typescript": "*",
+    "tool-forge-prelint-ast-grep": "ibuchanan/tool-forge-prelint-ast-grep",
+    "typescript": "5",
+    "vitest": "*"
   }
 }
