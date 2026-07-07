@@ -1,0 +1,24 @@
+pre-commit:
+  parallel: true
+  commands:
+    gitleaks:
+      run: |
+        command -v gitleaks >/dev/null 2>&1 || {
+          echo "gitleaks not found on PATH. Install it with: brew install gitleaks" >&2
+          exit 1
+        }
+        gitleaks git --pre-commit --staged
+    lint:
+      glob: "*.{ts,tsx}"
+      run: npm run lint:check
+    format:
+      glob: "*.{ts,tsx,json,yml,yaml,md}"
+      run: npm run format:check
+    typecheck:
+      glob: "*.{ts,tsx}"
+      run: npm run typecheck
+
+pre-push:
+  commands:
+    test:
+      run: npm run test
