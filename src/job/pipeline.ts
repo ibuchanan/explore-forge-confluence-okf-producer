@@ -7,20 +7,23 @@ import {
   renderLog,
   renderRootIndex,
 } from "./bundle";
-import { getDescendantIds, getPage, getSpaceKey } from "./confluenceClient";
+import { getPage, getSpaceKey } from "./confluenceClient";
 import { convertPageHtml } from "./convert";
 import { ExportCancelled, ExportFailed } from "./errors";
-import type {
-  BundlePage,
-  BundlePageMap,
-  ExportJob,
-  SkippedPage,
-} from "./types";
+import type { BundlePageMap, ExportJob, SkippedPage } from "./types";
 
+// Root-page validation and descendant enumeration already happened as the
+// user, synchronously, in the resolver (see resolvers/export.ts) before this
+// job existed -- `pageIds` is that pre-vetted set. Everything here runs
+// asApp() in an async queue consumer, which is the only way to get a longer
+// execution budget than a resolver's 25-second cap, at the cost of losing
+// asUser() auth (Forge has no invocation mode with both).
 export interface PipelineInput {
+  pageIds: string[];
   rootId: string;
   depth: number;
   bundleSlug: string;
+  initialSkipped: SkippedPage[];
 }
 
 export interface PipelineHooks {
@@ -37,66 +40,41 @@ export interface PipelineResult {
 const PROGRESS_REPORT_INTERVAL = 5;
 
 export async function run(
-  { rootId, depth, bundleSlug }: PipelineInput,
+  { pageIds, rootId, depth, bundleSlug, initialSkipped }: PipelineInput,
   { onProgress, isCancelled }: PipelineHooks,
 ): Promise<PipelineResult> {
-  onProgress({ stage: "resolving-root" });
-  let rootPage: BundlePage;
-  try {
-    const page = await getPage(rootId);
-    rootPage = { ...page, children: [], slug: "", conceptPath: "" };
-  } catch (exc) {
-    throw new ExportFailed(`Root page read failed: ${(exc as Error).message}`);
-  }
+  const skipped: SkippedPage[] = [...initialSkipped];
+  const pages: BundlePageMap = new Map();
 
-  const pages: BundlePageMap = new Map([[rootPage.id, rootPage]]);
-
-  onProgress({ stage: "listing-descendants" });
-  const skipped: SkippedPage[] = [];
-  let descendantIds: string[];
-  try {
-    descendantIds = await getDescendantIds(rootId, depth, {
-      isCancelled,
-      onSkippedBranch: (pageId, exc) => {
-        skipped.push({
-          id: pageId,
-          title: null,
-          reason: (exc as Error).message,
-        });
-      },
-    });
-  } catch (exc) {
-    if (exc instanceof ExportCancelled) {
-      throw exc;
-    }
-    throw new ExportFailed(
-      `Descendant listing failed: ${(exc as Error).message}`,
-    );
-  }
-
-  onProgress({ stage: "fetching-pages", exportedCount: 1 });
-  for (let i = 0; i < descendantIds.length; i += 1) {
+  onProgress({ stage: "fetching-pages", exportedCount: 0 });
+  for (let i = 0; i < pageIds.length; i += 1) {
     if (await isCancelled()) {
       throw new ExportCancelled();
     }
-    const descendantId = descendantIds[i];
-    if (!descendantId) {
+    const pageId = pageIds[i];
+    if (!pageId) {
       continue;
     }
     try {
-      const page = await getPage(descendantId);
+      const page = await getPage("app", pageId);
       pages.set(page.id, { ...page, children: [], slug: "", conceptPath: "" });
     } catch (exc) {
-      skipped.push({
-        id: descendantId,
-        title: null,
-        reason: (exc as Error).message,
-      });
+      skipped.push({ id: pageId, title: null, reason: (exc as Error).message });
     }
-    const isLast = i === descendantIds.length - 1;
+    const isLast = i === pageIds.length - 1;
     if (isLast || (i + 1) % PROGRESS_REPORT_INTERVAL === 0) {
       onProgress({ exportedCount: pages.size, warnings: [...skipped] });
     }
+  }
+
+  const rootPage = pages.get(rootId);
+  if (!rootPage) {
+    const reason = skipped.find((entry) => entry.id === rootId)?.reason;
+    throw new ExportFailed(
+      `Root page ${rootId} could not be read while building the archive${
+        reason ? `: ${reason}` : ""
+      }.`,
+    );
   }
 
   buildTree(pages);
@@ -112,7 +90,7 @@ export async function run(
   for (const page of pages.values()) {
     if (!spaceKeyMap.has(page.spaceId)) {
       try {
-        spaceKeyMap.set(page.spaceId, await getSpaceKey(page.spaceId));
+        spaceKeyMap.set(page.spaceId, await getSpaceKey("app", page.spaceId));
       } catch {
         spaceKeyMap.set(page.spaceId, "");
       }

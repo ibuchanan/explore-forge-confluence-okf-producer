@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requestConfluence = vi.fn();
+const requestConfluenceAsUser = vi.fn();
+const requestConfluenceAsApp = vi.fn();
 
 vi.mock("@forge/api", () => ({
-  default: { asUser: () => ({ requestConfluence }) },
+  default: {
+    asUser: () => ({ requestConfluence: requestConfluenceAsUser }),
+    asApp: () => ({ requestConfluence: requestConfluenceAsApp }),
+  },
   route: (strings: TemplateStringsArray, ...values: unknown[]) =>
     strings.reduce((acc, part, i) => `${acc}${part}${values[i] ?? ""}`, ""),
   assumeTrustedRoute: (path: string) => path,
@@ -14,13 +18,14 @@ function jsonResponse(body: unknown) {
 }
 
 beforeEach(() => {
-  requestConfluence.mockReset();
+  requestConfluenceAsUser.mockReset();
+  requestConfluenceAsApp.mockReset();
 });
 
 describe("getPage", () => {
-  it("extracts page fields from a v2 page response", async () => {
+  it("extracts page fields from a v2 page response, reading as the user", async () => {
     const { getPage } = await import("../../src/job/confluenceClient");
-    requestConfluence.mockResolvedValueOnce(
+    requestConfluenceAsUser.mockResolvedValueOnce(
       jsonResponse({
         id: "123",
         title: "APEX Hub",
@@ -37,7 +42,7 @@ describe("getPage", () => {
       }),
     );
 
-    const page = await getPage("123");
+    const page = await getPage("user", "123");
 
     expect(page).toEqual({
       id: "123",
@@ -51,17 +56,40 @@ describe("getPage", () => {
       html: "<p>Hi</p>",
       labels: ["how-to"],
     });
-    expect(requestConfluence).toHaveBeenCalledWith(
+    expect(requestConfluenceAsUser).toHaveBeenCalledWith(
       "/wiki/api/v2/pages/123?body-format=export_view&include-labels=true",
       { headers: { Accept: "application/json" } },
     );
+  });
+
+  it("reads as the app when called with auth 'app'", async () => {
+    const { getPage } = await import("../../src/job/confluenceClient");
+    requestConfluenceAsApp.mockResolvedValueOnce(
+      jsonResponse({
+        id: "123",
+        title: "APEX Hub",
+        parentId: null,
+        spaceId: "20",
+        body: { export_view: { value: "<p>Hi</p>" } },
+        labels: { results: [] },
+        _links: {},
+      }),
+    );
+
+    await getPage("app", "123");
+
+    expect(requestConfluenceAsApp).toHaveBeenCalledWith(
+      "/wiki/api/v2/pages/123?body-format=export_view&include-labels=true",
+      { headers: { Accept: "application/json" } },
+    );
+    expect(requestConfluenceAsUser).not.toHaveBeenCalled();
   });
 });
 
 describe("getChildIds", () => {
   it("paginates through _links.next and keeps only current-status children", async () => {
     const { getChildIds } = await import("../../src/job/confluenceClient");
-    requestConfluence
+    requestConfluenceAsUser
       .mockResolvedValueOnce(
         jsonResponse({
           results: [
@@ -81,12 +109,12 @@ describe("getChildIds", () => {
     const ids = await getChildIds("1");
 
     expect(ids).toEqual(["2", "4"]);
-    expect(requestConfluence).toHaveBeenNthCalledWith(
+    expect(requestConfluenceAsUser).toHaveBeenNthCalledWith(
       1,
       "/wiki/api/v2/pages/1/children?limit=100",
       { headers: { Accept: "application/json" } },
     );
-    expect(requestConfluence).toHaveBeenNthCalledWith(
+    expect(requestConfluenceAsUser).toHaveBeenNthCalledWith(
       2,
       "/wiki/api/v2/pages/1/children?cursor=abc",
       { headers: { Accept: "application/json" } },
@@ -97,7 +125,7 @@ describe("getChildIds", () => {
 describe("getDescendantIds", () => {
   it("walks children level-by-level up to depth, skipping branches that fail", async () => {
     const { getDescendantIds } = await import("../../src/job/confluenceClient");
-    requestConfluence
+    requestConfluenceAsUser
       .mockResolvedValueOnce(
         jsonResponse({
           results: [
@@ -129,7 +157,7 @@ describe("getDescendantIds", () => {
 
   it("fails the whole walk when the root's own children listing fails", async () => {
     const { getDescendantIds } = await import("../../src/job/confluenceClient");
-    requestConfluence.mockResolvedValueOnce({
+    requestConfluenceAsUser.mockResolvedValueOnce({
       ok: false,
       status: 500,
       statusText: "Server Error",
@@ -145,19 +173,36 @@ describe("getDescendantIds", () => {
     await expect(
       getDescendantIds("1", 2, { isCancelled: () => true }),
     ).rejects.toBeInstanceOf(ExportCancelled);
-    expect(requestConfluence).not.toHaveBeenCalled();
+    expect(requestConfluenceAsUser).not.toHaveBeenCalled();
   });
 });
 
 describe("getSpaceKey", () => {
-  it("returns the space key for a space id", async () => {
+  it("returns the space key for a space id, reading as the user", async () => {
     const { getSpaceKey } = await import("../../src/job/confluenceClient");
-    requestConfluence.mockResolvedValueOnce(jsonResponse({ key: "KEY" }));
+    requestConfluenceAsUser.mockResolvedValueOnce(jsonResponse({ key: "KEY" }));
 
-    expect(await getSpaceKey("20")).toBe("KEY");
-    expect(requestConfluence).toHaveBeenCalledWith("/wiki/api/v2/spaces/20", {
-      headers: { Accept: "application/json" },
-    });
+    expect(await getSpaceKey("user", "20")).toBe("KEY");
+    expect(requestConfluenceAsUser).toHaveBeenCalledWith(
+      "/wiki/api/v2/spaces/20",
+      {
+        headers: { Accept: "application/json" },
+      },
+    );
+  });
+
+  it("reads as the app when called with auth 'app'", async () => {
+    const { getSpaceKey } = await import("../../src/job/confluenceClient");
+    requestConfluenceAsApp.mockResolvedValueOnce(jsonResponse({ key: "KEY" }));
+
+    expect(await getSpaceKey("app", "20")).toBe("KEY");
+    expect(requestConfluenceAsApp).toHaveBeenCalledWith(
+      "/wiki/api/v2/spaces/20",
+      {
+        headers: { Accept: "application/json" },
+      },
+    );
+    expect(requestConfluenceAsUser).not.toHaveBeenCalled();
   });
 });
 
@@ -166,7 +211,7 @@ describe("resolvePersonalSpaceHomepage", () => {
     const { resolvePersonalSpaceHomepage } = await import(
       "../../src/job/confluenceClient"
     );
-    requestConfluence
+    requestConfluenceAsUser
       .mockResolvedValueOnce(jsonResponse({ results: [{ homepageId: "555" }] }))
       .mockResolvedValueOnce(
         jsonResponse({
@@ -196,7 +241,7 @@ describe("resolvePersonalSpaceHomepage", () => {
     const { resolvePersonalSpaceHomepage } = await import(
       "../../src/job/confluenceClient"
     );
-    requestConfluence.mockRejectedValueOnce(new Error("network down"));
+    requestConfluenceAsUser.mockRejectedValueOnce(new Error("network down"));
 
     expect(await resolvePersonalSpaceHomepage("1234")).toBeNull();
   });

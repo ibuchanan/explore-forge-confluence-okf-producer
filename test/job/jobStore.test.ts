@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGet = vi.fn();
 const mockSet = vi.fn();
+const mockDelete = vi.fn();
 
 vi.mock("@forge/kvs", () => ({
-  kvs: { get: mockGet, set: mockSet },
+  kvs: { get: mockGet, set: mockSet, delete: mockDelete },
 }));
 
 beforeEach(() => {
   mockGet.mockReset();
   mockSet.mockReset();
+  mockDelete.mockReset();
 });
 
 describe("createJob", () => {
@@ -22,16 +24,18 @@ describe("createJob", () => {
       rootId: "1",
       depth: 5,
       bundleSlug: "root",
+      pageIds: ["1", "2", "3"],
     });
 
     expect(job).toMatchObject({
       jobId: "job-1",
       accountId: "account-1",
       status: "queued",
-      stage: "validating",
+      stage: "fetching-pages",
       rootId: "1",
       depth: 5,
       bundleSlug: "root",
+      pageIds: ["1", "2", "3"],
       exportedCount: 0,
       skipped: [],
       warnings: [],
@@ -120,5 +124,43 @@ describe("isCancellationRequested", () => {
     mockGet.mockResolvedValueOnce(undefined);
 
     expect(await isCancellationRequested("account-1", "missing")).toBe(false);
+  });
+});
+
+describe("latest job pointer", () => {
+  it("setLatestJobId stores the job id under an account-scoped key", async () => {
+    const { setLatestJobId } = await import("../../src/job/jobStore");
+    mockSet.mockResolvedValueOnce(undefined);
+
+    await setLatestJobId("account-1", "job-1");
+
+    expect(mockSet).toHaveBeenCalledWith(
+      "export-latest-job:account-1",
+      "job-1",
+    );
+  });
+
+  it("getLatestJobId reads the job id back", async () => {
+    const { getLatestJobId } = await import("../../src/job/jobStore");
+    mockGet.mockResolvedValueOnce("job-1");
+
+    expect(await getLatestJobId("account-1")).toBe("job-1");
+    expect(mockGet).toHaveBeenCalledWith("export-latest-job:account-1");
+  });
+
+  it("getLatestJobId returns undefined when nothing is pointed to", async () => {
+    const { getLatestJobId } = await import("../../src/job/jobStore");
+    mockGet.mockResolvedValueOnce(undefined);
+
+    expect(await getLatestJobId("account-1")).toBeUndefined();
+  });
+
+  it("clearLatestJobId deletes the pointer", async () => {
+    const { clearLatestJobId } = await import("../../src/job/jobStore");
+    mockDelete.mockResolvedValueOnce(undefined);
+
+    await clearLatestJobId("account-1");
+
+    expect(mockDelete).toHaveBeenCalledWith("export-latest-job:account-1");
   });
 });

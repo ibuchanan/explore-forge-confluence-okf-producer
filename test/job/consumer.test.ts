@@ -26,8 +26,9 @@ const baseJob: ExportJob = {
   rootId: "1",
   rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
   depth: 5,
+  pageIds: ["1", "2"],
   status: "queued",
-  stage: "validating",
+  stage: "fetching-pages",
   exportedCount: 0,
   skipped: [],
   warnings: [],
@@ -71,6 +72,13 @@ describe("exportConsumer", () => {
     expect(patchJob).toHaveBeenCalledWith("account-1", "job-1", {
       status: "running",
     });
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageIds: baseJob.pageIds,
+        initialSkipped: baseJob.skipped,
+      }),
+      expect.anything(),
+    );
     expect(fetch).toHaveBeenCalledWith(
       "https://upload.example.com/presigned",
       expect.objectContaining({ method: "PUT" }),

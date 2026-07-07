@@ -6,7 +6,7 @@ import {
 
 describe("stageLabel", () => {
   it("maps a known job stage to its display label", () => {
-    expect(stageLabel("listing-descendants")).toBe("Listing descendant pages");
+    expect(stageLabel("converting-markdown")).toBe("Converting to Markdown");
   });
 
   it("falls back to the raw stage value when unknown", () => {

@@ -23,7 +23,13 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
 
   try {
     const { zipBuffer, exportedCount, skipped } = await run(
-      { rootId: job.rootId, depth: job.depth, bundleSlug: job.bundleSlug },
+      {
+        pageIds: job.pageIds,
+        rootId: job.rootId,
+        depth: job.depth,
+        bundleSlug: job.bundleSlug,
+        initialSkipped: job.skipped,
+      },
       {
         onProgress: (patch) => {
           patchJob(accountId, jobId, patch);

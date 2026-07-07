@@ -1,7 +1,4 @@
 const STAGE_LABELS: Record<string, string> = {
-  validating: "Validating",
-  "resolving-root": "Resolving root page",
-  "listing-descendants": "Listing descendant pages",
   "fetching-pages": "Fetching pages",
   "converting-markdown": "Converting to Markdown",
   "building-archive": "Building archive",

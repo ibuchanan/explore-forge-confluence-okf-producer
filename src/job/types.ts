@@ -24,10 +24,11 @@ export interface SkippedPage {
   reason: string;
 }
 
+// Root-page validation and descendant enumeration now happen synchronously
+// in the resolver (as the user) before a job is ever created -- see
+// resolvers/export.ts. By the time a job exists, its page set is already
+// known, so job stages only cover the async, asApp() content-fetch phase.
 export type JobStage =
-  | "validating"
-  | "resolving-root"
-  | "listing-descendants"
   | "fetching-pages"
   | "converting-markdown"
   | "building-archive"
@@ -42,6 +43,8 @@ export interface ExportJobInput {
   rootId: string;
   depth: number;
   bundleSlug: string;
+  /** Pre-vetted page IDs (root + descendants) enumerated as the user. */
+  pageIds: string[];
 }
 
 export interface ExportJob extends ExportJobInput {

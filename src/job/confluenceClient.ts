@@ -28,7 +28,10 @@ interface ConfluencePageResponse {
   _links?: ConfluenceLinks;
 }
 
+export type AuthMode = "user" | "app";
+
 async function fetchConfluenceJson<T>(
+  auth: AuthMode,
   routeOrPath: string | Route,
   description: string,
 ): Promise<T> {
@@ -36,9 +39,13 @@ async function fetchConfluenceJson<T>(
     typeof routeOrPath === "string"
       ? assumeTrustedRoute(routeOrPath)
       : routeOrPath;
-  const response = await api.asUser().requestConfluence(target, {
-    headers: { Accept: "application/json" },
-  });
+  const init = { headers: { Accept: "application/json" } };
+  // Two literal call sites (rather than a shared client variable) so the
+  // api.asUser()/api.asApp() authorization is visible at each call site.
+  const response =
+    auth === "user"
+      ? await api.asUser().requestConfluence(target, init)
+      : await api.asApp().requestConfluence(target, init);
   if (!response.ok) {
     throw new Error(
       `${description} failed: ${response.status} ${response.statusText}`,
@@ -47,8 +54,12 @@ async function fetchConfluenceJson<T>(
   return response.json();
 }
 
-export async function getPage(pageId: string): Promise<ConfluencePage> {
+export async function getPage(
+  auth: AuthMode,
+  pageId: string,
+): Promise<ConfluencePage> {
   const data = await fetchConfluenceJson<ConfluencePageResponse>(
+    auth,
     route`/wiki/api/v2/pages/${pageId}?body-format=export_view&include-labels=true`,
     `Reading page ${pageId}`,
   );
@@ -85,6 +96,7 @@ export async function getChildIds(pageId: string): Promise<string[]> {
   while (next) {
     const data: ConfluenceChildrenResponse =
       await fetchConfluenceJson<ConfluenceChildrenResponse>(
+        "user",
         next,
         `Listing children of ${pageId}`,
       );
@@ -136,8 +148,12 @@ export async function getDescendantIds(
   return ids;
 }
 
-export async function getSpaceKey(spaceId: string): Promise<string> {
+export async function getSpaceKey(
+  auth: AuthMode,
+  spaceId: string,
+): Promise<string> {
   const data = await fetchConfluenceJson<{ key?: string }>(
+    auth,
     route`/wiki/api/v2/spaces/${spaceId}`,
     `Reading space ${spaceId}`,
   );
@@ -151,6 +167,7 @@ export async function resolvePersonalSpaceHomepage(
     const data = await fetchConfluenceJson<{
       results?: Array<{ homepageId?: string }>;
     }>(
+      "user",
       route`/wiki/api/v2/spaces?keys=${`~${accountId}`}&limit=1`,
       "Resolving personal space",
     );
@@ -158,7 +175,7 @@ export async function resolvePersonalSpaceHomepage(
     if (!homepageId) {
       return null;
     }
-    const homepage = await getPage(homepageId);
+    const homepage = await getPage("user", homepageId);
     return homepage.webUrl || null;
   } catch {
     return null;

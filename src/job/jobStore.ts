@@ -5,6 +5,10 @@ function jobKey(accountId: string, jobId: string): string {
   return `export-job:${accountId}:${jobId}`;
 }
 
+function latestJobKey(accountId: string): string {
+  return `export-latest-job:${accountId}`;
+}
+
 export async function createJob(
   accountId: string,
   jobId: string,
@@ -15,11 +19,12 @@ export async function createJob(
     jobId,
     accountId,
     status: "queued",
-    stage: "validating",
+    stage: "fetching-pages",
     rootUrl: input.rootUrl,
     rootId: input.rootId,
     depth: input.depth,
     bundleSlug: input.bundleSlug,
+    pageIds: input.pageIds,
     exportedCount: 0,
     skipped: [],
     warnings: [],
@@ -72,4 +77,24 @@ export async function isCancellationRequested(
 ): Promise<boolean> {
   const job = await getJob(accountId, jobId);
   return Boolean(job?.cancelRequested);
+}
+
+// Points at the account's most recent export job so the Execution UI can
+// resume showing it after a navigation/remount. Not export history -- just
+// one pointer, overwritten by each new job (see spec: no durable history).
+export async function setLatestJobId(
+  accountId: string,
+  jobId: string,
+): Promise<void> {
+  await kvs.set(latestJobKey(accountId), jobId);
+}
+
+export async function getLatestJobId(
+  accountId: string,
+): Promise<string | undefined> {
+  return (await kvs.get(latestJobKey(accountId))) as string | undefined;
+}
+
+export async function clearLatestJobId(accountId: string): Promise<void> {
+  await kvs.delete(latestJobKey(accountId));
 }

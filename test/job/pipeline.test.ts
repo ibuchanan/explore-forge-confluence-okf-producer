@@ -8,16 +8,11 @@ import {
   renderLog,
   renderRootIndex,
 } from "../../src/job/bundle";
-import {
-  getDescendantIds,
-  getPage,
-  getSpaceKey,
-} from "../../src/job/confluenceClient";
+import { getPage, getSpaceKey } from "../../src/job/confluenceClient";
 import { convertPageHtml } from "../../src/job/convert";
 
 vi.mock("../../src/job/confluenceClient", () => ({
   getPage: vi.fn(),
-  getDescendantIds: vi.fn(),
   getSpaceKey: vi.fn(),
 }));
 vi.mock("../../src/job/convert", () => ({ convertPageHtml: vi.fn() }));
@@ -47,7 +42,6 @@ const FAKE_BUFFER = Buffer.from("zip");
 
 beforeEach(() => {
   vi.mocked(getPage).mockReset().mockResolvedValue(rootPage);
-  vi.mocked(getDescendantIds).mockReset().mockResolvedValue([]);
   vi.mocked(getSpaceKey).mockReset().mockResolvedValue("KEY");
   vi.mocked(convertPageHtml).mockReset().mockReturnValue("Converted body.");
   vi.mocked(buildTree).mockReset();
@@ -60,12 +54,18 @@ beforeEach(() => {
 });
 
 describe("run", () => {
-  it("reports stage progression and returns the archive on the happy path", async () => {
+  it("reports stage progression, fetches each pageId as the app, and returns the archive", async () => {
     const { run } = await import("../../src/job/pipeline");
     const onProgress = vi.fn();
 
     const result = await run(
-      { rootId: "1", depth: 5, bundleSlug: "root" },
+      {
+        pageIds: ["1"],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [],
+      },
       { onProgress, isCancelled: () => false },
     );
 
@@ -73,19 +73,38 @@ describe("run", () => {
       .map(([patch]) => patch.stage)
       .filter(Boolean);
     expect(stages).toEqual([
-      "resolving-root",
-      "listing-descendants",
       "fetching-pages",
       "converting-markdown",
       "building-archive",
     ]);
+    expect(getPage).toHaveBeenCalledWith("app", "1");
+    expect(getSpaceKey).toHaveBeenCalledWith("app", "10");
     expect(result.zipBuffer).toBe(FAKE_BUFFER);
     expect(result.exportedCount).toBe(1);
     expect(result.skipped).toEqual([]);
     expect(buildZipBuffer).toHaveBeenCalledWith("root", expect.any(Map));
   });
 
-  it("throws ExportFailed when the root page read fails", async () => {
+  it("carries forward enumeration-time skips passed in as initialSkipped", async () => {
+    const { run } = await import("../../src/job/pipeline");
+
+    const result = await run(
+      {
+        pageIds: ["1"],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [{ id: "9", title: null, reason: "403 Forbidden" }],
+      },
+      { onProgress: vi.fn(), isCancelled: () => false },
+    );
+
+    expect(result.skipped).toEqual([
+      { id: "9", title: null, reason: "403 Forbidden" },
+    ]);
+  });
+
+  it("throws ExportFailed with the real fetch-failure reason when the root page is missing from the fetched set", async () => {
     const { run } = await import("../../src/job/pipeline");
     const { ExportFailed } = await import("../../src/job/errors");
     vi.mocked(getPage)
@@ -94,18 +113,27 @@ describe("run", () => {
 
     await expect(
       run(
-        { rootId: "1", depth: 5, bundleSlug: "root" },
+        {
+          pageIds: ["1"],
+          rootId: "1",
+          depth: 5,
+          bundleSlug: "root",
+          initialSkipped: [],
+        },
         { onProgress: vi.fn(), isCancelled: () => false },
       ),
-    ).rejects.toBeInstanceOf(ExportFailed);
+    ).rejects.toThrow(
+      new ExportFailed(
+        "Root page 1 could not be read while building the archive: 403 Forbidden.",
+      ),
+    );
   });
 
   it("skips individual page fetch failures and records them", async () => {
     const { run } = await import("../../src/job/pipeline");
-    vi.mocked(getDescendantIds).mockReset().mockResolvedValue(["2", "3"]);
     vi.mocked(getPage)
       .mockReset()
-      .mockImplementation(async (pageId: string) => {
+      .mockImplementation(async (_auth: string, pageId: string) => {
         if (pageId === "2") {
           throw new Error("410 Gone");
         }
@@ -113,7 +141,13 @@ describe("run", () => {
       });
 
     const result = await run(
-      { rootId: "1", depth: 5, bundleSlug: "root" },
+      {
+        pageIds: ["1", "2", "3"],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [],
+      },
       { onProgress: vi.fn(), isCancelled: () => false },
     );
 
@@ -126,14 +160,19 @@ describe("run", () => {
   it("throws ExportCancelled and stops fetching remaining pages when cancelled mid-loop", async () => {
     const { run } = await import("../../src/job/pipeline");
     const { ExportCancelled } = await import("../../src/job/errors");
-    vi.mocked(getDescendantIds).mockReset().mockResolvedValue(["2", "3"]);
 
     await expect(
       run(
-        { rootId: "1", depth: 5, bundleSlug: "root" },
+        {
+          pageIds: ["1", "2", "3"],
+          rootId: "1",
+          depth: 5,
+          bundleSlug: "root",
+          initialSkipped: [],
+        },
         { onProgress: vi.fn(), isCancelled: () => true },
       ),
     ).rejects.toBeInstanceOf(ExportCancelled);
-    expect(getPage).toHaveBeenCalledTimes(1);
+    expect(getPage).not.toHaveBeenCalled();
   });
 });

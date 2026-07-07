@@ -2,13 +2,21 @@ import { randomUUID } from "node:crypto";
 import { Queue } from "@forge/events";
 import objectStore from "@forge/object-store";
 import type Resolver from "@forge/resolver";
-import { resolvePersonalSpaceHomepage } from "../job/confluenceClient";
 import {
+  getDescendantIds,
+  getPage,
+  resolvePersonalSpaceHomepage,
+} from "../job/confluenceClient";
+import {
+  clearLatestJobId,
   createJob,
   getJob,
+  getLatestJobId,
   patchJob,
   requestCancellation,
+  setLatestJobId,
 } from "../job/jobStore";
+import type { SkippedPage } from "../job/types";
 import { deriveSlugFromUrl, isSameSite, parsePageId } from "../util/pageUrl";
 
 const MAX_DEPTH = 5;
@@ -53,13 +61,71 @@ export function registerExportResolvers(resolver: Resolver): void {
       const bundleSlug =
         String(payload?.bundleSlug ?? "").trim() || deriveSlugFromUrl(rootUrl);
 
+      // Root-page validation and descendant enumeration run as the user,
+      // synchronously, here -- not in the async queue consumer, which has
+      // no user auth context to read with. This is also the last point at
+      // which the export's page set is scoped to what the current user can
+      // see; the consumer only ever fetches content for this pre-vetted list.
+      try {
+        await getPage("user", rootId);
+      } catch (exc) {
+        return { error: `Root page read failed: ${(exc as Error).message}` };
+      }
+      // The async consumer fetches content asApp(), not asUser() (see
+      // job/pipeline.ts) -- confirm the app can actually read the root page
+      // now, synchronously, rather than letting the job fail deep in the
+      // async phase for a permission gap between the two auth modes.
+      try {
+        await getPage("app", rootId);
+      } catch (exc) {
+        // Confluence typically returns 404 rather than 403 for content a
+        // requester can't see, to avoid revealing that it exists -- so a
+        // read that succeeds asUser() but fails asApp() here almost always
+        // means the page's space has view restrictions that don't extend to
+        // the app's own service-account identity. No manifest scope closes
+        // this gap; it needs a Confluence-side permission change.
+        return {
+          error:
+            "This page's space likely has view restrictions that don't include this app. " +
+            "Ask a site or space admin to grant the app access, or choose a root page from " +
+            `a space without view restrictions. (Root page read as the app failed: ${(exc as Error).message})`,
+        };
+      }
+
+      const enumerationSkipped: SkippedPage[] = [];
+      let descendantIds: string[];
+      try {
+        descendantIds = await getDescendantIds(rootId, depth, {
+          onSkippedBranch: (pageId, exc) => {
+            enumerationSkipped.push({
+              id: pageId,
+              title: null,
+              reason: (exc as Error).message,
+            });
+          },
+        });
+      } catch (exc) {
+        return {
+          error: `Descendant listing failed: ${(exc as Error).message}`,
+        };
+      }
+
       const jobId = randomUUID();
       await createJob(context.accountId, jobId, {
         rootUrl,
         rootId,
         depth,
         bundleSlug,
+        pageIds: [rootId, ...descendantIds],
       });
+      if (enumerationSkipped.length > 0) {
+        await patchJob(context.accountId, jobId, {
+          skipped: enumerationSkipped,
+        });
+      }
+      // So the Execution UI can find this job again after a navigation or
+      // remount -- see getActiveExportJob below.
+      await setLatestJobId(context.accountId, jobId);
       const { jobId: queueJobId } = await exportQueue.push({
         body: { accountId: context.accountId, jobId },
       });
@@ -118,4 +184,21 @@ export function registerExportResolvers(resolver: Resolver): void {
       return { url: result.url };
     },
   );
+
+  // Lets the Execution UI rediscover an in-flight or recently-finished job
+  // after a navigation/remount, instead of always starting from a blank
+  // form. Not export history -- just the one most recent job per account.
+  resolver.define("getActiveExportJob", async ({ context }) => {
+    const latestJobId = await getLatestJobId(context.accountId);
+    if (!latestJobId) {
+      return { job: null };
+    }
+    const job = await getJob(context.accountId, latestJobId);
+    return { job: job ?? null };
+  });
+
+  resolver.define("clearActiveExportJob", async ({ context }) => {
+    await clearLatestJobId(context.accountId);
+    return { ok: true };
+  });
 }
