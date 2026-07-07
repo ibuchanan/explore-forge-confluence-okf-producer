@@ -44,23 +44,34 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@forge/api": "^8.0.1",
     "@forge/bridge": "6.1",
+    "@forge/events": "^3.0.1",
+    "@forge/kvs": "^2.0.1",
+    "@forge/object-store": "^2.0.1",
     "@forge/react": "12.0",
     "@forge/resolver": "2.0",
-    "react": "^18.2"
+    "node-html-markdown": "^2.0.0",
+    "node-html-parser": "^9.0.0",
+    "react": "^18.2",
+    "yaml": "^2.9.0",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.44",
     "@biomejs/biome": "2.5.2",
     "@size-limit/preset-app": "^12.1.0",
     "@types/node": "*",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "archunit": "*",
     "git-cliff": "*",
     "openapi-typescript": "*",
     "size-limit": "^12.1.0",
     "tool-forge-prelint-ast-grep": "ibuchanan/tool-forge-prelint-ast-grep",
     "typescript": "5",
-    "vitest": "*"
+    "vitest": "*",
+    "yauzl": "^3.4.0"
   },
   "size-limit": [
     {

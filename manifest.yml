@@ -5,13 +5,28 @@ modules:
       render: native
       resolver:
         function: resolver
-      title: explore-forge-confluence-okf-producer
+      title: OKF Producer
+  objectStore:
+    - key: okf-exports
+      storageClass: standard
+  consumer:
+    - key: okf-export-consumer
+      queue: okf-export
+      function: exportConsumer
   function:
     - key: resolver
       handler: index.handler
+    - key: exportConsumer
+      handler: index.exportConsumer
+      timeoutSeconds: 900
 resources:
   - key: main
     path: src/frontend/index.tsx
+permissions:
+  scopes:
+    - read:page:confluence
+    - read:space:confluence
+    - storage:app
 app:
   runtime:
     name: nodejs24.x
