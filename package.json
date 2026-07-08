@@ -1,8 +1,11 @@
 {
   "name": "explore-forge-confluence-okf-producer",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "main": "dist/index.mjs",
   "types": "dist/index.d.mts",
   "exports": {
@@ -14,11 +17,12 @@
   "scripts": {
     "build": "tsc",
     "changelog": "git cliff",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run size:check",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run size:check && npm run test",
     "clean": "rm -rf ./node_modules && rm package-lock.json && rm -rf ./dist",
     "dev": "tsdown --watch",
     "forge:deploy": "source .env && forge deploy --environment \"$FORGE_ENVIRONMENT\"",
     "forge:install": "source .env && forge install --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
+    "forge:register": "forge register",
     "forge:uninstall": "source .env && forge uninstall --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\"",
     "forge:upgrade": "source .env && forge install --upgrade --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
     "forge:variables:set": "source .env && forge variables set --environment \"$FORGE_ENVIRONMENT\"",
@@ -63,7 +67,7 @@
     "@ast-grep/cli": "^0.44",
     "@biomejs/biome": "2.5.2",
     "@size-limit/preset-app": "^12.1",
-    "@types/node": "*",
+    "@types/node": "^24.13.2",
     "@types/yauzl": "^3.4",
     "@types/yazl": "^3.3",
     "archunit": "*",
@@ -74,7 +78,7 @@
     "tool-forge-prelint-ast-grep": "github:ibuchanan/tool-forge-prelint-ast-grep",
     "typescript": "^5.9",
     "vitest": "*",
-    "yauzl": "^3.4.0"
+    "yauzl": "^3.4"
   },
   "size-limit": [
     {
