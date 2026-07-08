@@ -51,8 +51,8 @@
     "@forge/object-store": "^2.0",
     "@forge/react": "^12.0",
     "@forge/resolver": "^2.0",
-    "@forge-ahead/atlassian-api-types": "github:ibuchanan/forge-ahead-atlassian-api-types",
-    "@forge-ahead/errors": "github:ibuchanan/forge-ahead-errors",
+    "@forge-ahead/atlassian-api-types": "github:ibuchanan/forge-ahead-atlassian-api-types#0.1.0",
+    "@forge-ahead/errors": "github:ibuchanan/forge-ahead-errors#0.1.0",
     "node-html-markdown": "^2.0",
     "node-html-parser": "^9.0",
     "react": "^18.2",
@@ -93,8 +93,7 @@
     "fsevents@2.3.3": true,
     "iframe-resizer@4.4.5": true,
     "lefthook@2.1.9": true,
-    "github:ibuchanan/forge-ahead-errors#ebb8d32cc98d3f53a605989b76419eaa54dd3e5e": true,
     "github:ibuchanan/forge-ahead-errors#1b89e19c0f9bcf9a0522300684f85869469453ce": true,
-    "github:ibuchanan/forge-ahead-atlassian-api-types#4586d92da381c41867550136685793a09ccb3eff": true
+    "github:ibuchanan/forge-ahead-atlassian-api-types#c1120db3d1b1a2455acd72b05238d3a48226b983": true
   }
 }
