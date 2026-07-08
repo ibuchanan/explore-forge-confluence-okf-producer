@@ -351,12 +351,21 @@ describe("buildZipBuffer", () => {
       ["pages/apex-hub-1.md", "# APEX Hub\n"],
     ]);
 
-    const zipBuffer = await buildZipBuffer("apex-hub-export", files);
-    const names = await readZipEntryNames(zipBuffer);
+    const result = await buildZipBuffer("apex-hub-export", files);
+    const names = await readZipEntryNames(result._unsafeUnwrap());
 
     expect(names.sort()).toEqual([
       "apex-hub-export/index.md",
       "apex-hub-export/pages/apex-hub-1.md",
     ]);
+  });
+
+  it("returns Err with a ProblemDetails when a file path is invalid", async () => {
+    const files = new Map([["", "# Bundle\n"]]);
+
+    const result = await buildZipBuffer("apex-hub-export", files);
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
   });
 });

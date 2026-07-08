@@ -19,13 +19,14 @@ describe("createJob", () => {
     const { createJob } = await import("../../src/job/jobStore");
     mockSet.mockResolvedValueOnce(undefined);
 
-    const job = await createJob("account-1", "job-1", {
+    const result = await createJob("account-1", "job-1", {
       rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
       rootId: "1",
       depth: 5,
       bundleSlug: "root",
       pageIds: ["1", "2", "3"],
     });
+    const job = result._unsafeUnwrap();
 
     expect(job).toMatchObject({
       jobId: "job-1",
@@ -46,6 +47,22 @@ describe("createJob", () => {
     });
     expect(mockSet).toHaveBeenCalledWith("export-job:account-1:job-1", job);
   });
+
+  it("returns Err with a ProblemDetails when the write fails", async () => {
+    const { createJob } = await import("../../src/job/jobStore");
+    mockSet.mockRejectedValueOnce(new Error("kvs unavailable"));
+
+    const result = await createJob("account-1", "job-1", {
+      rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
+      rootId: "1",
+      depth: 5,
+      bundleSlug: "root",
+      pageIds: ["1"],
+    });
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
+  });
 });
 
 describe("getJob", () => {
@@ -54,17 +71,30 @@ describe("getJob", () => {
     const stored = { jobId: "job-1", accountId: "account-1" };
     mockGet.mockResolvedValueOnce(stored);
 
-    const job = await getJob("account-1", "job-1");
+    const result = await getJob("account-1", "job-1");
 
-    expect(job).toBe(stored);
+    expect(result._unsafeUnwrap()).toBe(stored);
     expect(mockGet).toHaveBeenCalledWith("export-job:account-1:job-1");
   });
 
-  it("returns undefined when the job does not exist", async () => {
+  it("returns Ok(undefined) when the job does not exist", async () => {
     const { getJob } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce(undefined);
 
-    expect(await getJob("account-1", "missing")).toBeUndefined();
+    const result = await getJob("account-1", "missing");
+
+    expect(result.isOk()).toBe(true);
+    expect(result._unsafeUnwrap()).toBeUndefined();
+  });
+
+  it("returns Err with a ProblemDetails when the read fails", async () => {
+    const { getJob } = await import("../../src/job/jobStore");
+    mockGet.mockRejectedValueOnce(new Error("kvs unavailable"));
+
+    const result = await getJob("account-1", "job-1");
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
   });
 });
 
@@ -79,22 +109,23 @@ describe("patchJob", () => {
     });
     mockSet.mockResolvedValueOnce(undefined);
 
-    const updated = await patchJob("account-1", "job-1", { status: "running" });
+    const result = await patchJob("account-1", "job-1", { status: "running" });
+    const updated = result._unsafeUnwrap();
 
     expect(updated).toMatchObject({ jobId: "job-1", status: "running" });
     expect(updated?.updatedAt).not.toBe("2020-01-01T00:00:00.000Z");
     expect(mockSet).toHaveBeenCalledWith("export-job:account-1:job-1", updated);
   });
 
-  it("returns null and does not write when the job does not exist", async () => {
+  it("returns Ok(null) and does not write when the job does not exist", async () => {
     const { patchJob } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce(undefined);
 
-    const updated = await patchJob("account-1", "missing", {
+    const result = await patchJob("account-1", "missing", {
       status: "running",
     });
 
-    expect(updated).toBeNull();
+    expect(result._unsafeUnwrap()).toBeNull();
     expect(mockSet).not.toHaveBeenCalled();
   });
 });
@@ -105,9 +136,9 @@ describe("requestCancellation", () => {
     mockGet.mockResolvedValueOnce({ jobId: "job-1", cancelRequested: false });
     mockSet.mockResolvedValueOnce(undefined);
 
-    const updated = await requestCancellation("account-1", "job-1");
+    const result = await requestCancellation("account-1", "job-1");
 
-    expect(updated?.cancelRequested).toBe(true);
+    expect(result._unsafeUnwrap()?.cancelRequested).toBe(true);
   });
 });
 
@@ -116,14 +147,18 @@ describe("isCancellationRequested", () => {
     const { isCancellationRequested } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce({ jobId: "job-1", cancelRequested: true });
 
-    expect(await isCancellationRequested("account-1", "job-1")).toBe(true);
+    const result = await isCancellationRequested("account-1", "job-1");
+
+    expect(result._unsafeUnwrap()).toBe(true);
   });
 
   it("is false when the job does not exist", async () => {
     const { isCancellationRequested } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce(undefined);
 
-    expect(await isCancellationRequested("account-1", "missing")).toBe(false);
+    const result = await isCancellationRequested("account-1", "missing");
+
+    expect(result._unsafeUnwrap()).toBe(false);
   });
 });
 
@@ -132,8 +167,9 @@ describe("latest job pointer", () => {
     const { setLatestJobId } = await import("../../src/job/jobStore");
     mockSet.mockResolvedValueOnce(undefined);
 
-    await setLatestJobId("account-1", "job-1");
+    const result = await setLatestJobId("account-1", "job-1");
 
+    expect(result.isOk()).toBe(true);
     expect(mockSet).toHaveBeenCalledWith(
       "export-latest-job:account-1",
       "job-1",
@@ -144,23 +180,28 @@ describe("latest job pointer", () => {
     const { getLatestJobId } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce("job-1");
 
-    expect(await getLatestJobId("account-1")).toBe("job-1");
+    const result = await getLatestJobId("account-1");
+
+    expect(result._unsafeUnwrap()).toBe("job-1");
     expect(mockGet).toHaveBeenCalledWith("export-latest-job:account-1");
   });
 
-  it("getLatestJobId returns undefined when nothing is pointed to", async () => {
+  it("getLatestJobId returns Ok(undefined) when nothing is pointed to", async () => {
     const { getLatestJobId } = await import("../../src/job/jobStore");
     mockGet.mockResolvedValueOnce(undefined);
 
-    expect(await getLatestJobId("account-1")).toBeUndefined();
+    const result = await getLatestJobId("account-1");
+
+    expect(result._unsafeUnwrap()).toBeUndefined();
   });
 
   it("clearLatestJobId deletes the pointer", async () => {
     const { clearLatestJobId } = await import("../../src/job/jobStore");
     mockDelete.mockResolvedValueOnce(undefined);
 
-    await clearLatestJobId("account-1");
+    const result = await clearLatestJobId("account-1");
 
+    expect(result.isOk()).toBe(true);
     expect(mockDelete).toHaveBeenCalledWith("export-latest-job:account-1");
   });
 });

@@ -1,10 +1,12 @@
 import Resolver from "@forge/resolver";
+import { ok } from "@forge-ahead/errors";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDescendantIds,
   getPage,
   resolvePersonalSpaceHomepage,
 } from "../../src/job/confluenceClient";
+import { exportFailed } from "../../src/job/errors";
 import {
   clearLatestJobId,
   createJob,
@@ -67,8 +69,8 @@ beforeEach(async () => {
   vi.mocked(resolvePersonalSpaceHomepage).mockReset();
   vi.mocked(getPage)
     .mockReset()
-    .mockResolvedValue({ id: "1" } as never);
-  vi.mocked(getDescendantIds).mockReset().mockResolvedValue([]);
+    .mockResolvedValue(ok({ id: "1" } as never));
+  vi.mocked(getDescendantIds).mockReset().mockResolvedValue(ok([]));
   vi.mocked(createJob).mockReset();
   vi.mocked(getJob).mockReset();
   vi.mocked(patchJob).mockReset();
@@ -134,8 +136,8 @@ describe("startExportJob", () => {
   });
 
   it("validates the root page and enumerates descendants as the user before creating the job", async () => {
-    vi.mocked(getDescendantIds).mockResolvedValue(["2", "3"]);
-    vi.mocked(createJob).mockResolvedValue({} as never);
+    vi.mocked(getDescendantIds).mockResolvedValue(ok(["2", "3"]));
+    vi.mocked(createJob).mockResolvedValue(ok({} as never));
     queuePush.mockResolvedValue({ jobId: "queue-job-99" });
 
     const result = await callResolver(
@@ -179,7 +181,7 @@ describe("startExportJob", () => {
   });
 
   it("fails fast without creating a job when the root page cannot be read", async () => {
-    vi.mocked(getPage).mockRejectedValue(new Error("403 Forbidden"));
+    vi.mocked(getPage).mockResolvedValue(exportFailed("403 Forbidden"));
 
     const result = await callResolver(
       resolver,
@@ -199,9 +201,9 @@ describe("startExportJob", () => {
   it("fails fast without creating a job when the root page is readable as the user but not as the app", async () => {
     vi.mocked(getPage).mockImplementation(async (auth) => {
       if (auth === "app") {
-        throw new Error("403 Forbidden");
+        return exportFailed("403 Forbidden");
       }
-      return { id: "1" } as never;
+      return ok({ id: "1" } as never);
     });
 
     const result = await callResolver(
@@ -223,8 +225,8 @@ describe("startExportJob", () => {
   });
 
   it("fails fast without creating a job when descendant listing fails entirely", async () => {
-    vi.mocked(getDescendantIds).mockRejectedValue(
-      new Error("500 Server Error"),
+    vi.mocked(getDescendantIds).mockResolvedValue(
+      exportFailed("500 Server Error"),
     );
 
     const result = await callResolver(
@@ -244,11 +246,14 @@ describe("startExportJob", () => {
   it("seeds the job's skipped list from branches skipped during enumeration", async () => {
     vi.mocked(getDescendantIds).mockImplementation(
       async (_rootId, _depth, hooks) => {
-        hooks?.onSkippedBranch?.("9", new Error("403 Forbidden"));
-        return ["2"];
+        hooks?.onSkippedBranch?.(
+          "9",
+          exportFailed("403 Forbidden")._unsafeUnwrapErr(),
+        );
+        return ok(["2"]);
       },
     );
-    vi.mocked(createJob).mockResolvedValue({} as never);
+    vi.mocked(createJob).mockResolvedValue(ok({} as never));
     queuePush.mockResolvedValue({ jobId: "queue-job-99" });
 
     const result = await callResolver(
@@ -269,7 +274,7 @@ describe("startExportJob", () => {
 describe("getExportJob", () => {
   it("returns the job record", async () => {
     const job = { jobId: "job-1", status: "running" };
-    vi.mocked(getJob).mockResolvedValue(job as never);
+    vi.mocked(getJob).mockResolvedValue(ok(job as never));
 
     const result = await callResolver(
       resolver,
@@ -282,7 +287,7 @@ describe("getExportJob", () => {
   });
 
   it("returns an error when the job does not exist", async () => {
-    vi.mocked(getJob).mockResolvedValue(undefined);
+    vi.mocked(getJob).mockResolvedValue(ok(undefined));
 
     const result = await callResolver(
       resolver,
@@ -299,11 +304,13 @@ describe("cancelExportJob", () => {
   it("requests cancellation and cancels the queue job using the queue's own job id", async () => {
     const cancel = vi.fn().mockResolvedValue(undefined);
     queueGetJob.mockReturnValue({ cancel });
-    vi.mocked(requestCancellation).mockResolvedValue({
-      jobId: "job-1",
-      queueJobId: "queue-job-99",
-      cancelRequested: true,
-    } as never);
+    vi.mocked(requestCancellation).mockResolvedValue(
+      ok({
+        jobId: "job-1",
+        queueJobId: "queue-job-99",
+        cancelRequested: true,
+      } as never),
+    );
 
     const result = await callResolver(
       resolver,
@@ -319,7 +326,7 @@ describe("cancelExportJob", () => {
   });
 
   it("returns an error when the job does not exist", async () => {
-    vi.mocked(requestCancellation).mockResolvedValue(null);
+    vi.mocked(requestCancellation).mockResolvedValue(ok(null));
 
     const result = await callResolver(
       resolver,
@@ -334,11 +341,13 @@ describe("cancelExportJob", () => {
 
 describe("createArchiveDownloadUrl", () => {
   it("returns a download url when the archive is ready", async () => {
-    vi.mocked(getJob).mockResolvedValue({
-      jobId: "job-1",
-      status: "ready",
-      archiveKey: "exports/account-1/job-1/root.zip",
-    } as never);
+    vi.mocked(getJob).mockResolvedValue(
+      ok({
+        jobId: "job-1",
+        status: "ready",
+        archiveKey: "exports/account-1/job-1/root.zip",
+      } as never),
+    );
     createDownloadUrl.mockResolvedValue({
       url: "https://download.example.com/presigned",
     });
@@ -357,10 +366,12 @@ describe("createArchiveDownloadUrl", () => {
   });
 
   it("returns an error when the archive is not ready", async () => {
-    vi.mocked(getJob).mockResolvedValue({
-      jobId: "job-1",
-      status: "running",
-    } as never);
+    vi.mocked(getJob).mockResolvedValue(
+      ok({
+        jobId: "job-1",
+        status: "running",
+      } as never),
+    );
 
     const result = await callResolver(
       resolver,
@@ -375,9 +386,9 @@ describe("createArchiveDownloadUrl", () => {
 
 describe("getActiveExportJob", () => {
   it("returns the account's most recent job when one is pointed to", async () => {
-    vi.mocked(getLatestJobId).mockResolvedValue("job-1");
+    vi.mocked(getLatestJobId).mockResolvedValue(ok("job-1"));
     const job = { jobId: "job-1", status: "running" };
-    vi.mocked(getJob).mockResolvedValue(job as never);
+    vi.mocked(getJob).mockResolvedValue(ok(job as never));
 
     const result = await callResolver(
       resolver,
@@ -392,7 +403,7 @@ describe("getActiveExportJob", () => {
   });
 
   it("returns a null job when nothing is pointed to", async () => {
-    vi.mocked(getLatestJobId).mockResolvedValue(undefined);
+    vi.mocked(getLatestJobId).mockResolvedValue(ok(undefined));
 
     const result = await callResolver(
       resolver,
@@ -406,8 +417,8 @@ describe("getActiveExportJob", () => {
   });
 
   it("returns a null job when the pointer is stale and the job record is gone", async () => {
-    vi.mocked(getLatestJobId).mockResolvedValue("job-1");
-    vi.mocked(getJob).mockResolvedValue(undefined);
+    vi.mocked(getLatestJobId).mockResolvedValue(ok("job-1"));
+    vi.mocked(getJob).mockResolvedValue(ok(undefined));
 
     const result = await callResolver(
       resolver,

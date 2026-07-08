@@ -1,3 +1,4 @@
+import { ok } from "@forge-ahead/errors";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assignPaths,
@@ -41,16 +42,16 @@ const rootPage = {
 const FAKE_BUFFER = Buffer.from("zip");
 
 beforeEach(() => {
-  vi.mocked(getPage).mockReset().mockResolvedValue(rootPage);
-  vi.mocked(getSpaceKey).mockReset().mockResolvedValue("KEY");
-  vi.mocked(convertPageHtml).mockReset().mockReturnValue("Converted body.");
+  vi.mocked(getPage).mockReset().mockResolvedValue(ok(rootPage));
+  vi.mocked(getSpaceKey).mockReset().mockResolvedValue(ok("KEY"));
+  vi.mocked(convertPageHtml).mockReset().mockReturnValue(ok("Converted body."));
   vi.mocked(buildTree).mockReset();
   vi.mocked(assignPaths).mockReset();
   vi.mocked(renderConceptDocument).mockReset().mockReturnValue("DOC");
   vi.mocked(renderDirIndex).mockReset().mockReturnValue("DIR_INDEX");
   vi.mocked(renderRootIndex).mockReset().mockReturnValue("ROOT_INDEX");
   vi.mocked(renderLog).mockReset().mockReturnValue("LOG");
-  vi.mocked(buildZipBuffer).mockReset().mockResolvedValue(FAKE_BUFFER);
+  vi.mocked(buildZipBuffer).mockReset().mockResolvedValue(ok(FAKE_BUFFER));
 });
 
 describe("run", () => {
@@ -58,7 +59,7 @@ describe("run", () => {
     const { run } = await import("../../src/job/pipeline");
     const onProgress = vi.fn();
 
-    const result = await run(
+    const outcome = await run(
       {
         pageIds: ["1"],
         rootId: "1",
@@ -68,6 +69,7 @@ describe("run", () => {
       },
       { onProgress, isCancelled: () => false },
     );
+    const result = outcome._unsafeUnwrap();
 
     const stages = onProgress.mock.calls
       .map(([patch]) => patch.stage)
@@ -88,7 +90,7 @@ describe("run", () => {
   it("carries forward enumeration-time skips passed in as initialSkipped", async () => {
     const { run } = await import("../../src/job/pipeline");
 
-    const result = await run(
+    const outcome = await run(
       {
         pageIds: ["1"],
         rootId: "1",
@@ -99,48 +101,48 @@ describe("run", () => {
       { onProgress: vi.fn(), isCancelled: () => false },
     );
 
-    expect(result.skipped).toEqual([
+    expect(outcome._unsafeUnwrap().skipped).toEqual([
       { id: "9", title: null, reason: "403 Forbidden" },
     ]);
   });
 
-  it("throws ExportFailed with the real fetch-failure reason when the root page is missing from the fetched set", async () => {
+  it("returns Err with the real fetch-failure reason when the root page is missing from the fetched set", async () => {
     const { run } = await import("../../src/job/pipeline");
-    const { ExportFailed } = await import("../../src/job/errors");
+    const { exportFailed } = await import("../../src/job/errors");
     vi.mocked(getPage)
       .mockReset()
-      .mockRejectedValue(new Error("403 Forbidden"));
+      .mockResolvedValue(exportFailed("403 Forbidden", 403));
 
-    await expect(
-      run(
-        {
-          pageIds: ["1"],
-          rootId: "1",
-          depth: 5,
-          bundleSlug: "root",
-          initialSkipped: [],
-        },
-        { onProgress: vi.fn(), isCancelled: () => false },
-      ),
-    ).rejects.toThrow(
-      new ExportFailed(
-        "Root page 1 could not be read while building the archive: 403 Forbidden.",
-      ),
+    const outcome = await run(
+      {
+        pageIds: ["1"],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [],
+      },
+      { onProgress: vi.fn(), isCancelled: () => false },
+    );
+
+    expect(outcome.isErr()).toBe(true);
+    expect(outcome._unsafeUnwrapErr().detail).toBe(
+      "Root page 1 could not be read while building the archive: 403 Forbidden.",
     );
   });
 
   it("skips individual page fetch failures and records them", async () => {
     const { run } = await import("../../src/job/pipeline");
+    const { exportFailed } = await import("../../src/job/errors");
     vi.mocked(getPage)
       .mockReset()
       .mockImplementation(async (_auth: string, pageId: string) => {
         if (pageId === "2") {
-          throw new Error("410 Gone");
+          return exportFailed("410 Gone", 410);
         }
-        return { ...rootPage, id: pageId };
+        return ok({ ...rootPage, id: pageId });
       });
 
-    const result = await run(
+    const outcome = await run(
       {
         pageIds: ["1", "2", "3"],
         rootId: "1",
@@ -150,6 +152,7 @@ describe("run", () => {
       },
       { onProgress: vi.fn(), isCancelled: () => false },
     );
+    const result = outcome._unsafeUnwrap();
 
     expect(result.skipped).toEqual([
       { id: "2", title: null, reason: "410 Gone" },
@@ -157,22 +160,23 @@ describe("run", () => {
     expect(result.exportedCount).toBe(2);
   });
 
-  it("throws ExportCancelled and stops fetching remaining pages when cancelled mid-loop", async () => {
+  it("returns a cancelled ProblemDetails and stops fetching remaining pages when cancelled mid-loop", async () => {
     const { run } = await import("../../src/job/pipeline");
-    const { ExportCancelled } = await import("../../src/job/errors");
+    const { isCancelled } = await import("../../src/job/errors");
 
-    await expect(
-      run(
-        {
-          pageIds: ["1", "2", "3"],
-          rootId: "1",
-          depth: 5,
-          bundleSlug: "root",
-          initialSkipped: [],
-        },
-        { onProgress: vi.fn(), isCancelled: () => true },
-      ),
-    ).rejects.toBeInstanceOf(ExportCancelled);
+    const outcome = await run(
+      {
+        pageIds: ["1", "2", "3"],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [],
+      },
+      { onProgress: vi.fn(), isCancelled: () => true },
+    );
+
+    expect(outcome.isErr()).toBe(true);
+    expect(isCancelled(outcome._unsafeUnwrapErr())).toBe(true);
     expect(getPage).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import type { ProblemDetails, Result } from "@forge-ahead/errors";
 import {
   assignPaths,
   buildTree,
@@ -9,8 +10,13 @@ import {
 } from "./bundle";
 import { getPage, getSpaceKey } from "./confluenceClient";
 import { convertPageHtml } from "./convert";
-import { ExportCancelled, ExportFailed } from "./errors";
-import type { BundlePageMap, ExportJob, SkippedPage } from "./types";
+import { exportCancelled, exportFailed } from "./errors";
+import type {
+  BundlePageMap,
+  ConfluencePage,
+  ExportJob,
+  SkippedPage,
+} from "./types";
 
 // Root-page validation and descendant enumeration already happened as the
 // user, synchronously, in the resolver (see resolvers/export.ts) before this
@@ -39,27 +45,38 @@ export interface PipelineResult {
 
 const PROGRESS_REPORT_INTERVAL = 5;
 
+// Per-page fetch/conversion failures are recorded in `skipped` and the
+// export continues -- only cancellation and a missing root page (after the
+// fetch loop) fail the whole run.
 export async function run(
   { pageIds, rootId, depth, bundleSlug, initialSkipped }: PipelineInput,
   { onProgress, isCancelled }: PipelineHooks,
-): Promise<PipelineResult> {
+): Promise<Result<PipelineResult, ProblemDetails>> {
   const skipped: SkippedPage[] = [...initialSkipped];
   const pages: BundlePageMap = new Map();
 
   onProgress({ stage: "fetching-pages", exportedCount: 0 });
   for (let i = 0; i < pageIds.length; i += 1) {
     if (await isCancelled()) {
-      throw new ExportCancelled();
+      return exportCancelled();
     }
     const pageId = pageIds[i];
     if (!pageId) {
       continue;
     }
-    try {
-      const page = await getPage("app", pageId);
+    const pageResult: Result<ConfluencePage, ProblemDetails> = await getPage(
+      "app",
+      pageId,
+    );
+    if (pageResult.isOk()) {
+      const page = pageResult.value;
       pages.set(page.id, { ...page, children: [], slug: "", conceptPath: "" });
-    } catch (exc) {
-      skipped.push({ id: pageId, title: null, reason: (exc as Error).message });
+    } else {
+      skipped.push({
+        id: pageId,
+        title: null,
+        reason: pageResult.error.detail,
+      });
     }
     const isLast = i === pageIds.length - 1;
     if (isLast || (i + 1) % PROGRESS_REPORT_INTERVAL === 0) {
@@ -70,7 +87,7 @@ export async function run(
   const rootPage = pages.get(rootId);
   if (!rootPage) {
     const reason = skipped.find((entry) => entry.id === rootId)?.reason;
-    throw new ExportFailed(
+    return exportFailed(
       `Root page ${rootId} could not be read while building the archive${
         reason ? `: ${reason}` : ""
       }.`,
@@ -89,11 +106,14 @@ export async function run(
   const spaceKeyMap = new Map<string, string>();
   for (const page of pages.values()) {
     if (!spaceKeyMap.has(page.spaceId)) {
-      try {
-        spaceKeyMap.set(page.spaceId, await getSpaceKey("app", page.spaceId));
-      } catch {
-        spaceKeyMap.set(page.spaceId, "");
-      }
+      const spaceKeyResult: Result<string, ProblemDetails> = await getSpaceKey(
+        "app",
+        page.spaceId,
+      );
+      spaceKeyMap.set(
+        page.spaceId,
+        spaceKeyResult.isOk() ? spaceKeyResult.value : "",
+      );
     }
   }
 
@@ -104,10 +124,15 @@ export async function run(
     let markdown: string | null = null;
     let conversionError: string | null = null;
     if (page.html) {
-      try {
-        markdown = convertPageHtml(page.html, page.conceptPath, idToPath);
-      } catch (exc) {
-        conversionError = (exc as Error).message;
+      const convertResult = convertPageHtml(
+        page.html,
+        page.conceptPath,
+        idToPath,
+      );
+      if (convertResult.isOk()) {
+        markdown = convertResult.value;
+      } else {
+        conversionError = convertResult.error.detail;
       }
     } else {
       conversionError = "export_view HTML was not available for this page.";
@@ -138,7 +163,10 @@ export async function run(
   );
 
   onProgress({ stage: "building-archive" });
-  const zipBuffer = await buildZipBuffer(bundleSlug, files);
-
-  return { zipBuffer, exportedCount: pages.size, skipped };
+  const zipResult = await buildZipBuffer(bundleSlug, files);
+  return zipResult.map((zipBuffer) => ({
+    zipBuffer,
+    exportedCount: pages.size,
+    skipped,
+  }));
 }

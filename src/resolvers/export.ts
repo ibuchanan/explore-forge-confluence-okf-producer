@@ -66,18 +66,18 @@ export function registerExportResolvers(resolver: Resolver): void {
       // no user auth context to read with. This is also the last point at
       // which the export's page set is scoped to what the current user can
       // see; the consumer only ever fetches content for this pre-vetted list.
-      try {
-        await getPage("user", rootId);
-      } catch (exc) {
-        return { error: `Root page read failed: ${(exc as Error).message}` };
+      const userReadResult = await getPage("user", rootId);
+      if (userReadResult.isErr()) {
+        return {
+          error: `Root page read failed: ${userReadResult.error.detail}`,
+        };
       }
       // The async consumer fetches content asApp(), not asUser() (see
       // job/pipeline.ts) -- confirm the app can actually read the root page
       // now, synchronously, rather than letting the job fail deep in the
       // async phase for a permission gap between the two auth modes.
-      try {
-        await getPage("app", rootId);
-      } catch (exc) {
+      const appReadResult = await getPage("app", rootId);
+      if (appReadResult.isErr()) {
         // Confluence typically returns 404 rather than 403 for content a
         // requester can't see, to avoid revealing that it exists -- so a
         // read that succeeds asUser() but fails asApp() here almost always
@@ -88,36 +88,40 @@ export function registerExportResolvers(resolver: Resolver): void {
           error:
             "This page's space likely has view restrictions that don't include this app. " +
             "Ask a site or space admin to grant the app access, or choose a root page from " +
-            `a space without view restrictions. (Root page read as the app failed: ${(exc as Error).message})`,
+            `a space without view restrictions. (Root page read as the app failed: ${appReadResult.error.detail})`,
         };
       }
 
       const enumerationSkipped: SkippedPage[] = [];
-      let descendantIds: string[];
-      try {
-        descendantIds = await getDescendantIds(rootId, depth, {
-          onSkippedBranch: (pageId, exc) => {
-            enumerationSkipped.push({
-              id: pageId,
-              title: null,
-              reason: (exc as Error).message,
-            });
-          },
-        });
-      } catch (exc) {
+      const descendantsResult = await getDescendantIds(rootId, depth, {
+        onSkippedBranch: (pageId, problem) => {
+          enumerationSkipped.push({
+            id: pageId,
+            title: null,
+            reason: problem.detail,
+          });
+        },
+      });
+      if (descendantsResult.isErr()) {
         return {
-          error: `Descendant listing failed: ${(exc as Error).message}`,
+          error: `Descendant listing failed: ${descendantsResult.error.detail}`,
         };
       }
+      const descendantIds = descendantsResult.value;
 
       const jobId = randomUUID();
-      await createJob(context.accountId, jobId, {
+      const jobResult = await createJob(context.accountId, jobId, {
         rootUrl,
         rootId,
         depth,
         bundleSlug,
         pageIds: [rootId, ...descendantIds],
       });
+      if (jobResult.isErr()) {
+        return {
+          error: `Could not create the export job: ${jobResult.error.detail}`,
+        };
+      }
       if (enumerationSkipped.length > 0) {
         await patchJob(context.accountId, jobId, {
           skipped: enumerationSkipped,
@@ -138,21 +142,28 @@ export function registerExportResolvers(resolver: Resolver): void {
   resolver.define<JobIdPayload>(
     "getExportJob",
     async ({ payload, context }) => {
-      const job = await getJob(context.accountId, payload?.jobId ?? "");
-      if (!job) {
+      const jobResult = await getJob(context.accountId, payload?.jobId ?? "");
+      if (jobResult.isErr()) {
+        return { error: jobResult.error.detail };
+      }
+      if (!jobResult.value) {
         return { error: "Job not found." };
       }
-      return job;
+      return jobResult.value;
     },
   );
 
   resolver.define<JobIdPayload>(
     "cancelExportJob",
     async ({ payload, context }) => {
-      const job = await requestCancellation(
+      const cancelResult = await requestCancellation(
         context.accountId,
         payload?.jobId ?? "",
       );
+      if (cancelResult.isErr()) {
+        return { error: cancelResult.error.detail };
+      }
+      const job = cancelResult.value;
       if (!job) {
         return { error: "Job not found." };
       }
@@ -173,7 +184,11 @@ export function registerExportResolvers(resolver: Resolver): void {
   resolver.define<JobIdPayload>(
     "createArchiveDownloadUrl",
     async ({ payload, context }) => {
-      const job = await getJob(context.accountId, payload?.jobId ?? "");
+      const jobResult = await getJob(context.accountId, payload?.jobId ?? "");
+      if (jobResult.isErr()) {
+        return { error: jobResult.error.detail };
+      }
+      const job = jobResult.value;
       if (job?.status !== "ready" || !job.archiveKey) {
         return { error: "Archive is not ready." };
       }
@@ -189,11 +204,15 @@ export function registerExportResolvers(resolver: Resolver): void {
   // after a navigation/remount, instead of always starting from a blank
   // form. Not export history -- just the one most recent job per account.
   resolver.define("getActiveExportJob", async ({ context }) => {
-    const latestJobId = await getLatestJobId(context.accountId);
+    const latestIdResult = await getLatestJobId(context.accountId);
+    const latestJobId = latestIdResult.isOk()
+      ? latestIdResult.value
+      : undefined;
     if (!latestJobId) {
       return { job: null };
     }
-    const job = await getJob(context.accountId, latestJobId);
+    const jobResult = await getJob(context.accountId, latestJobId);
+    const job = jobResult.isOk() ? jobResult.value : undefined;
     return { job: job ?? null };
   });
 

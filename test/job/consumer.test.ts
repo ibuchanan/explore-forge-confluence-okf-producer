@@ -1,3 +1,4 @@
+import { ok } from "@forge-ahead/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getJob,
@@ -41,10 +42,10 @@ const baseJob: ExportJob = {
 };
 
 beforeEach(() => {
-  vi.mocked(getJob).mockReset().mockResolvedValue(baseJob);
-  vi.mocked(patchJob).mockReset().mockResolvedValue(baseJob);
+  vi.mocked(getJob).mockReset().mockResolvedValue(ok(baseJob));
+  vi.mocked(patchJob).mockReset().mockResolvedValue(ok(baseJob));
   vi.mocked(run).mockReset();
-  vi.mocked(isCancellationRequested).mockReset().mockResolvedValue(false);
+  vi.mocked(isCancellationRequested).mockReset().mockResolvedValue(ok(false));
   createUploadUrl
     .mockReset()
     .mockResolvedValue({ url: "https://upload.example.com/presigned" });
@@ -61,11 +62,13 @@ afterEach(() => {
 describe("exportConsumer", () => {
   it("uploads the archive and marks the job ready on success", async () => {
     const { exportConsumer } = await import("../../src/job/consumer");
-    vi.mocked(run).mockResolvedValue({
-      zipBuffer: Buffer.from("zip-bytes"),
-      exportedCount: 3,
-      skipped: [],
-    });
+    vi.mocked(run).mockResolvedValue(
+      ok({
+        zipBuffer: Buffer.from("zip-bytes"),
+        exportedCount: 3,
+        skipped: [],
+      }),
+    );
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
 
@@ -96,8 +99,8 @@ describe("exportConsumer", () => {
 
   it("marks the job cancelled without uploading when the pipeline is cancelled", async () => {
     const { exportConsumer } = await import("../../src/job/consumer");
-    const { ExportCancelled } = await import("../../src/job/errors");
-    vi.mocked(run).mockRejectedValue(new ExportCancelled());
+    const { exportCancelled } = await import("../../src/job/errors");
+    vi.mocked(run).mockResolvedValue(exportCancelled());
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
 
@@ -108,11 +111,11 @@ describe("exportConsumer", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("marks the job failed with the error message when the pipeline throws", async () => {
+  it("marks the job failed with the error message when the pipeline fails", async () => {
     const { exportConsumer } = await import("../../src/job/consumer");
-    const { ExportFailed } = await import("../../src/job/errors");
-    vi.mocked(run).mockRejectedValue(
-      new ExportFailed("Root page read failed: 403 Forbidden"),
+    const { exportFailed } = await import("../../src/job/errors");
+    vi.mocked(run).mockResolvedValue(
+      exportFailed("Root page read failed: 403 Forbidden"),
     );
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
@@ -126,7 +129,7 @@ describe("exportConsumer", () => {
 
   it("does nothing when the job record is missing", async () => {
     const { exportConsumer } = await import("../../src/job/consumer");
-    vi.mocked(getJob).mockResolvedValue(undefined);
+    vi.mocked(getJob).mockResolvedValue(ok(undefined));
 
     await exportConsumer({
       body: { accountId: "account-1", jobId: "missing" },

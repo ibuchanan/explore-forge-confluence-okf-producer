@@ -1,4 +1,6 @@
 import { kvs } from "@forge/kvs";
+import { ok, type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
+import { exportFailed } from "./errors";
 import type { ExportJob, ExportJobInput } from "./types";
 
 function jobKey(accountId: string, jobId: string): string {
@@ -9,11 +11,22 @@ function latestJobKey(accountId: string): string {
   return `export-latest-job:${accountId}`;
 }
 
-export async function createJob(
+function kvsSet(
+  key: string,
+  value: unknown,
+): ResultAsync<void, ProblemDetails> {
+  return ResultAsync.fromPromise(kvs.set(key, value), (exc) =>
+    exportFailed(
+      `Failed to write ${key}: ${(exc as Error).message}`,
+    )._unsafeUnwrapErr(),
+  );
+}
+
+export function createJob(
   accountId: string,
   jobId: string,
   input: ExportJobInput,
-): Promise<ExportJob> {
+): ResultAsync<ExportJob, ProblemDetails> {
   const now = new Date().toISOString();
   const job: ExportJob = {
     jobId,
@@ -35,66 +48,85 @@ export async function createJob(
     createdAt: now,
     updatedAt: now,
   };
-  await kvs.set(jobKey(accountId, jobId), job);
-  return job;
+  return kvsSet(jobKey(accountId, jobId), job).map(() => job);
 }
 
-export async function getJob(
+export function getJob(
   accountId: string,
   jobId: string,
-): Promise<ExportJob | undefined> {
-  return (await kvs.get(jobKey(accountId, jobId))) as ExportJob | undefined;
+): ResultAsync<ExportJob | undefined, ProblemDetails> {
+  const key = jobKey(accountId, jobId);
+  return ResultAsync.fromPromise(
+    kvs.get(key) as Promise<ExportJob | undefined>,
+    (exc) =>
+      exportFailed(
+        `Failed to read ${key}: ${(exc as Error).message}`,
+      )._unsafeUnwrapErr(),
+  );
 }
 
-export async function patchJob(
+export function patchJob(
   accountId: string,
   jobId: string,
   patch: Partial<ExportJob>,
-): Promise<ExportJob | null> {
-  const existing = await getJob(accountId, jobId);
-  if (!existing) {
-    return null;
-  }
-  const updated: ExportJob = {
-    ...existing,
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
-  await kvs.set(jobKey(accountId, jobId), updated);
-  return updated;
+): ResultAsync<ExportJob | null, ProblemDetails> {
+  return getJob(accountId, jobId).andThen((existing) => {
+    if (!existing) {
+      return ok(null);
+    }
+    const updated: ExportJob = {
+      ...existing,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    return kvsSet(jobKey(accountId, jobId), updated).map(() => updated);
+  });
 }
 
-export async function requestCancellation(
+export function requestCancellation(
   accountId: string,
   jobId: string,
-): Promise<ExportJob | null> {
+): ResultAsync<ExportJob | null, ProblemDetails> {
   return patchJob(accountId, jobId, { cancelRequested: true });
 }
 
-export async function isCancellationRequested(
+export function isCancellationRequested(
   accountId: string,
   jobId: string,
-): Promise<boolean> {
-  const job = await getJob(accountId, jobId);
-  return Boolean(job?.cancelRequested);
+): ResultAsync<boolean, ProblemDetails> {
+  return getJob(accountId, jobId).map((job) => Boolean(job?.cancelRequested));
 }
 
 // Points at the account's most recent export job so the Execution UI can
 // resume showing it after a navigation/remount. Not export history -- just
 // one pointer, overwritten by each new job (see spec: no durable history).
-export async function setLatestJobId(
+export function setLatestJobId(
   accountId: string,
   jobId: string,
-): Promise<void> {
-  await kvs.set(latestJobKey(accountId), jobId);
+): ResultAsync<void, ProblemDetails> {
+  return kvsSet(latestJobKey(accountId), jobId);
 }
 
-export async function getLatestJobId(
+export function getLatestJobId(
   accountId: string,
-): Promise<string | undefined> {
-  return (await kvs.get(latestJobKey(accountId))) as string | undefined;
+): ResultAsync<string | undefined, ProblemDetails> {
+  const key = latestJobKey(accountId);
+  return ResultAsync.fromPromise(
+    kvs.get(key) as Promise<string | undefined>,
+    (exc) =>
+      exportFailed(
+        `Failed to read ${key}: ${(exc as Error).message}`,
+      )._unsafeUnwrapErr(),
+  );
 }
 
-export async function clearLatestJobId(accountId: string): Promise<void> {
-  await kvs.delete(latestJobKey(accountId));
+export function clearLatestJobId(
+  accountId: string,
+): ResultAsync<void, ProblemDetails> {
+  const key = latestJobKey(accountId);
+  return ResultAsync.fromPromise(kvs.delete(key), (exc) =>
+    exportFailed(
+      `Failed to delete ${key}: ${(exc as Error).message}`,
+    )._unsafeUnwrapErr(),
+  );
 }

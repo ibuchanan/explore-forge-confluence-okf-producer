@@ -42,9 +42,9 @@ describe("getPage", () => {
       }),
     );
 
-    const page = await getPage("user", "123");
+    const result = await getPage("user", "123");
 
-    expect(page).toEqual({
+    expect(result._unsafeUnwrap()).toEqual({
       id: "123",
       title: "APEX Hub",
       parentId: "10",
@@ -84,6 +84,20 @@ describe("getPage", () => {
     );
     expect(requestConfluenceAsUser).not.toHaveBeenCalled();
   });
+
+  it("produces a ProblemDetails carrying Confluence's status when the request fails", async () => {
+    const { getPage } = await import("../../src/job/confluenceClient");
+    requestConfluenceAsUser.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+    });
+
+    const result = await getPage("user", "123");
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 404 });
+  });
 });
 
 describe("getChildIds", () => {
@@ -106,9 +120,9 @@ describe("getChildIds", () => {
         }),
       );
 
-    const ids = await getChildIds("1");
+    const result = await getChildIds("1");
 
-    expect(ids).toEqual(["2", "4"]);
+    expect(result._unsafeUnwrap()).toEqual(["2", "4"]);
     expect(requestConfluenceAsUser).toHaveBeenNthCalledWith(
       1,
       "/wiki/api/v2/pages/1/children?limit=100",
@@ -119,6 +133,20 @@ describe("getChildIds", () => {
       "/wiki/api/v2/pages/1/children?cursor=abc",
       { headers: { Accept: "application/json" } },
     );
+  });
+
+  it("returns Err when the listing request fails", async () => {
+    const { getChildIds } = await import("../../src/job/confluenceClient");
+    requestConfluenceAsUser.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: "Server Error",
+    });
+
+    const result = await getChildIds("1");
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
   });
 });
 
@@ -145,12 +173,12 @@ describe("getDescendantIds", () => {
       });
 
     const skipped: Array<{ id: string; reason: string }> = [];
-    const ids = await getDescendantIds("1", 2, {
-      onSkippedBranch: (pageId, exc) =>
-        skipped.push({ id: pageId, reason: (exc as Error).message }),
+    const result = await getDescendantIds("1", 2, {
+      onSkippedBranch: (pageId, problem) =>
+        skipped.push({ id: pageId, reason: problem.detail }),
     });
 
-    expect(ids.sort()).toEqual(["2", "3", "4"]);
+    expect(result._unsafeUnwrap().sort()).toEqual(["2", "3", "4"]);
     expect(skipped).toHaveLength(1);
     expect(skipped[0]?.id).toBe("3");
   });
@@ -163,16 +191,20 @@ describe("getDescendantIds", () => {
       statusText: "Server Error",
     });
 
-    await expect(getDescendantIds("1", 2, {})).rejects.toThrow();
+    const result = await getDescendantIds("1", 2, {});
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
   });
 
-  it("throws ExportCancelled and stops fetching when isCancelled becomes true", async () => {
+  it("returns a cancelled ProblemDetails and stops fetching when isCancelled becomes true", async () => {
     const { getDescendantIds } = await import("../../src/job/confluenceClient");
-    const { ExportCancelled } = await import("../../src/job/errors");
+    const { isCancelled } = await import("../../src/job/errors");
 
-    await expect(
-      getDescendantIds("1", 2, { isCancelled: () => true }),
-    ).rejects.toBeInstanceOf(ExportCancelled);
+    const result = await getDescendantIds("1", 2, { isCancelled: () => true });
+
+    expect(result.isErr()).toBe(true);
+    expect(isCancelled(result._unsafeUnwrapErr())).toBe(true);
     expect(requestConfluenceAsUser).not.toHaveBeenCalled();
   });
 });
@@ -182,7 +214,9 @@ describe("getSpaceKey", () => {
     const { getSpaceKey } = await import("../../src/job/confluenceClient");
     requestConfluenceAsUser.mockResolvedValueOnce(jsonResponse({ key: "KEY" }));
 
-    expect(await getSpaceKey("user", "20")).toBe("KEY");
+    const result = await getSpaceKey("user", "20");
+
+    expect(result._unsafeUnwrap()).toBe("KEY");
     expect(requestConfluenceAsUser).toHaveBeenCalledWith(
       "/wiki/api/v2/spaces/20",
       {
@@ -195,7 +229,9 @@ describe("getSpaceKey", () => {
     const { getSpaceKey } = await import("../../src/job/confluenceClient");
     requestConfluenceAsApp.mockResolvedValueOnce(jsonResponse({ key: "KEY" }));
 
-    expect(await getSpaceKey("app", "20")).toBe("KEY");
+    const result = await getSpaceKey("app", "20");
+
+    expect(result._unsafeUnwrap()).toBe("KEY");
     expect(requestConfluenceAsApp).toHaveBeenCalledWith(
       "/wiki/api/v2/spaces/20",
       {

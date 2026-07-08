@@ -1,5 +1,7 @@
+import { ok, type ProblemDetails, type Result } from "@forge-ahead/errors";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { parse } from "node-html-parser";
+import { exportFailed } from "./errors";
 
 const PAGE_ID_IN_HREF = /\/pages\/(\d+)/;
 
@@ -24,35 +26,50 @@ export function rewriteInternalLinks(
   html: string,
   currentPath: string,
   idToPath: Map<string, string>,
-): string {
-  const root = parse(html);
-  for (const anchor of root.querySelectorAll("a")) {
-    const href = anchor.getAttribute("href");
-    if (!href) {
-      continue;
+): Result<string, ProblemDetails> {
+  try {
+    const root = parse(html);
+    for (const anchor of root.querySelectorAll("a")) {
+      const href = anchor.getAttribute("href");
+      if (!href) {
+        continue;
+      }
+      const match = href.match(PAGE_ID_IN_HREF);
+      const pageId = match?.[1];
+      if (!pageId) {
+        continue;
+      }
+      const targetPath = idToPath.get(pageId);
+      if (!targetPath) {
+        continue;
+      }
+      anchor.setAttribute("href", relativePath(currentPath, targetPath));
     }
-    const match = href.match(PAGE_ID_IN_HREF);
-    const pageId = match?.[1];
-    if (!pageId) {
-      continue;
-    }
-    const targetPath = idToPath.get(pageId);
-    if (!targetPath) {
-      continue;
-    }
-    anchor.setAttribute("href", relativePath(currentPath, targetPath));
+    return ok(root.toString());
+  } catch (exc) {
+    return exportFailed(
+      `Failed to rewrite internal links: ${(exc as Error).message}`,
+    );
   }
-  return root.toString();
 }
 
 export function convertPageHtml(
   html: string | null,
   currentPath: string,
   idToPath: Map<string, string>,
-): string | null {
+): Result<string | null, ProblemDetails> {
   if (!html) {
-    return null;
+    return ok(null);
   }
-  const rewritten = rewriteInternalLinks(html, currentPath, idToPath);
-  return NodeHtmlMarkdown.translate(rewritten).trim();
+  return rewriteInternalLinks(html, currentPath, idToPath).andThen(
+    (rewritten) => {
+      try {
+        return ok(NodeHtmlMarkdown.translate(rewritten).trim());
+      } catch (exc) {
+        return exportFailed(
+          `Markdown conversion failed: ${(exc as Error).message}`,
+        );
+      }
+    },
+  );
 }

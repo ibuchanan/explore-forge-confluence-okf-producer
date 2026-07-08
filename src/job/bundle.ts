@@ -1,6 +1,8 @@
+import { type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
 import { stringify } from "yaml";
 import { ZipFile } from "yazl";
 import { slugify } from "../util/pageUrl";
+import { exportFailed } from "./errors";
 import type { BundlePage, BundlePageMap, SkippedPage } from "./types";
 
 export function buildTree(pages: BundlePageMap): void {
@@ -215,8 +217,8 @@ export function renderLog(
 export function buildZipBuffer(
   bundleSlug: string,
   files: Map<string, string>,
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+): ResultAsync<Buffer, ProblemDetails> {
+  const promise = new Promise<Buffer>((resolve, reject) => {
     const zipFile = new ZipFile();
     for (const [relativePath, content] of files) {
       zipFile.addBuffer(
@@ -231,4 +233,10 @@ export function buildZipBuffer(
     zipFile.outputStream.on("error", reject);
     zipFile.end();
   });
+
+  return ResultAsync.fromPromise(promise, (exc) =>
+    exportFailed(
+      `Failed to build archive: ${(exc as Error).message}`,
+    )._unsafeUnwrapErr(),
+  );
 }

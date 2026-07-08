@@ -44,33 +44,34 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@forge/api": "^8.0.1",
+    "@forge/api": "^8.0",
     "@forge/bridge": "6.1",
-    "@forge/events": "^3.0.1",
-    "@forge/kvs": "^2.0.1",
-    "@forge/object-store": "^2.0.1",
-    "@forge/react": "12.0",
-    "@forge/resolver": "2.0",
-    "node-html-markdown": "^2.0.0",
-    "node-html-parser": "^9.0.0",
+    "@forge/events": "^3.0",
+    "@forge/kvs": "^2.0",
+    "@forge/object-store": "^2.0",
+    "@forge/react": "^12.0",
+    "@forge/resolver": "^2.0",
+    "@forge-ahead/errors": "github:ibuchanan/forge-ahead-errors",
+    "node-html-markdown": "^2.0",
+    "node-html-parser": "^9.0",
     "react": "^18.2",
-    "yaml": "^2.9.0",
-    "yazl": "^3.3.1"
+    "yaml": "^2.9",
+    "yazl": "^3.3"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.44",
     "@biomejs/biome": "2.5.2",
-    "@size-limit/preset-app": "^12.1.0",
+    "@size-limit/preset-app": "^12.1",
     "@types/node": "*",
-    "@types/yauzl": "^3.4.0",
-    "@types/yazl": "^3.3.1",
+    "@types/yauzl": "^3.4",
+    "@types/yazl": "^3.3",
     "archunit": "*",
     "git-cliff": "*",
-    "lefthook": "^2.1.9",
+    "lefthook": "^2.1",
     "openapi-typescript": "*",
-    "size-limit": "^12.1.0",
-    "tool-forge-prelint-ast-grep": "ibuchanan/tool-forge-prelint-ast-grep",
-    "typescript": "5",
+    "size-limit": "^12.1",
+    "tool-forge-prelint-ast-grep": "github:ibuchanan/tool-forge-prelint-ast-grep",
+    "typescript": "^5.9",
     "vitest": "*",
     "yauzl": "^3.4.0"
   },
@@ -85,5 +86,12 @@
       "limit": "20 kB",
       "running": false
     }
-  ]
+  ],
+  "allowScripts": {
+    "@ast-grep/cli@0.44.1": true,
+    "fsevents@2.3.3": true,
+    "iframe-resizer@4.4.5": true,
+    "lefthook@2.1.9": true,
+    "github:ibuchanan/forge-ahead-errors#ebb8d32cc98d3f53a605989b76419eaa54dd3e5e": true
+  }
 }
