@@ -16,7 +16,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "sourceMap": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "module": "ESNext",
 
     /* Strictness */

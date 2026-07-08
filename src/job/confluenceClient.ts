@@ -1,5 +1,6 @@
 import type { Route } from "@forge/api";
 import api, { assumeTrustedRoute, route } from "@forge/api";
+import type { operations } from "@forge-ahead/atlassian-api-types/confluence-2";
 import {
   err,
   errAsync,
@@ -13,28 +14,25 @@ import type { ConfluencePage } from "./types";
 
 const CURRENT_STATUS = "current";
 
-interface ConfluenceLinks {
-  base?: string;
-  webui?: string;
-  next?: string;
-}
+// The OpenAPI spec's BodySingle schema only declares storage/atlas_doc_format/view
+// -- it's missing export_view/exportView even though body-format=export_view is a
+// documented, supported query value. This patches that gap onto the generated type.
+type PageResponse =
+  operations["getPageById"]["responses"][200]["content"]["application/json"] & {
+    body?: {
+      export_view?: { value?: string };
+      exportView?: { value?: string };
+    };
+  };
 
-interface ConfluenceChildrenResponse {
-  results?: Array<{ id: string | number; status?: string }>;
-  _links?: ConfluenceLinks;
-}
+type ChildrenResponse =
+  operations["getChildPages"]["responses"][200]["content"]["application/json"];
 
-interface ConfluencePageResponse {
-  id: string;
-  title: string;
-  parentId: string | null;
-  spaceId: string;
-  version?: { number: number };
-  status?: string;
-  body?: { export_view?: { value?: string }; exportView?: { value?: string } };
-  labels?: { results?: Array<{ name?: string }> };
-  _links?: ConfluenceLinks;
-}
+type SpaceResponse =
+  operations["getSpaceById"]["responses"][200]["content"]["application/json"];
+
+type SpacesListResponse =
+  operations["getSpaces"]["responses"][200]["content"]["application/json"];
 
 export type AuthMode = "user" | "app";
 
@@ -85,14 +83,13 @@ export function getPage(
   auth: AuthMode,
   pageId: string,
 ): ResultAsync<ConfluencePage, ProblemDetails> {
-  return fetchConfluenceJson<ConfluencePageResponse>(
+  return fetchConfluenceJson<PageResponse>(
     auth,
     route`/wiki/api/v2/pages/${pageId}?body-format=export_view&include-labels=true`,
     `Reading page ${pageId}`,
   ).map((data) => {
-    const body = data.body ?? {};
-    const exportView = body.export_view ?? body.exportView ?? {};
-    const html = exportView.value ?? null;
+    const html =
+      data.body?.export_view?.value ?? data.body?.exportView?.value ?? null;
 
     const labels = (data.labels?.results ?? [])
       .map((entry) => entry.name)
@@ -103,10 +100,10 @@ export function getPage(
     const webUrl = `${base}${links.webui ?? ""}`;
 
     return {
-      id: String(data.id),
-      title: data.title,
+      id: String(data.id ?? ""),
+      title: data.title ?? "",
       parentId: data.parentId ? String(data.parentId) : null,
-      spaceId: String(data.spaceId),
+      spaceId: String(data.spaceId ?? ""),
       version: data.version?.number ?? 0,
       status: data.status ?? CURRENT_STATUS,
       webUrl,
@@ -123,8 +120,8 @@ export async function getChildIds(
   let next: string | Route | null =
     route`/wiki/api/v2/pages/${pageId}/children?limit=100`;
   while (next) {
-    const result: Result<ConfluenceChildrenResponse, ProblemDetails> =
-      await fetchConfluenceJson<ConfluenceChildrenResponse>(
+    const result: Result<ChildrenResponse, ProblemDetails> =
+      await fetchConfluenceJson<ChildrenResponse>(
         "user",
         next,
         `Listing children of ${pageId}`,
@@ -132,10 +129,10 @@ export async function getChildIds(
     if (result.isErr()) {
       return err(result.error);
     }
-    const data: ConfluenceChildrenResponse = result.value;
+    const data: ChildrenResponse = result.value;
     for (const item of data.results ?? []) {
       if ((item.status ?? CURRENT_STATUS) === CURRENT_STATUS) {
-        ids.push(String(item.id));
+        ids.push(String(item.id ?? ""));
       }
     }
     const nextLink: string | undefined = data._links?.next;
@@ -185,7 +182,7 @@ export function getSpaceKey(
   auth: AuthMode,
   spaceId: string,
 ): ResultAsync<string, ProblemDetails> {
-  return fetchConfluenceJson<{ key?: string }>(
+  return fetchConfluenceJson<SpaceResponse>(
     auth,
     route`/wiki/api/v2/spaces/${spaceId}`,
     `Reading space ${spaceId}`,
@@ -199,9 +196,7 @@ export function getSpaceKey(
 export async function resolvePersonalSpaceHomepage(
   accountId: string,
 ): Promise<string | null> {
-  const spacesResult = await fetchConfluenceJson<{
-    results?: Array<{ homepageId?: string }>;
-  }>(
+  const spacesResult = await fetchConfluenceJson<SpacesListResponse>(
     "user",
     route`/wiki/api/v2/spaces?keys=${`~${accountId}`}&limit=1`,
     "Resolving personal space",
