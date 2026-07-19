@@ -1,0 +1,14 @@
+{
+  "entry": [
+    "src/index.ts",
+    // Forge resolves this Custom UI resource from manifest.yml, so it is not
+    // reachable through normal TypeScript imports.
+    "src/frontend/index.tsx"
+  ],
+  "ignoreDependencies": [
+    "@forge-ahead/prelint",
+    "@size-limit/file",
+    "git-cliff"
+  ],
+  "ignorePatterns": ["specs/references/**"]
+}
