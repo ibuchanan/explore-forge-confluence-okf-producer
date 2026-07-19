@@ -1,12 +1,9 @@
 import Resolver from "@forge/resolver";
 import { ok } from "@forge-ahead/errors";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getDescendantIds,
-  getPage,
-  resolvePersonalSpaceHomepage,
-} from "../../src/job/confluenceClient";
+import { resolvePersonalSpaceHomepage } from "../../src/job/confluenceClient";
 import { exportFailed } from "../../src/job/errors";
+import { startExportJobIntake } from "../../src/job/exportJobIntake";
 import {
   clearLatestJobId,
   createJob,
@@ -25,6 +22,9 @@ vi.mock("../../src/job/confluenceClient", () => ({
   resolvePersonalSpaceHomepage: vi.fn(),
   getPage: vi.fn(),
   getDescendantIds: vi.fn(),
+}));
+vi.mock("../../src/job/exportJobIntake", () => ({
+  startExportJobIntake: vi.fn(),
 }));
 vi.mock("../../src/job/jobStore", () => ({
   createJob: vi.fn(),
@@ -67,10 +67,7 @@ beforeEach(async () => {
   resolver = new Resolver();
   registerExportResolvers(resolver);
   vi.mocked(resolvePersonalSpaceHomepage).mockReset();
-  vi.mocked(getPage)
-    .mockReset()
-    .mockResolvedValue(ok({ id: "1" } as never));
-  vi.mocked(getDescendantIds).mockReset().mockResolvedValue(ok([]));
+  vi.mocked(startExportJobIntake).mockReset();
   vi.mocked(createJob).mockReset();
   vi.mocked(getJob).mockReset();
   vi.mocked(patchJob).mockReset();
@@ -106,7 +103,39 @@ describe("getDefaultSource", () => {
 describe("startExportJob", () => {
   const context = { siteUrl: "https://example.atlassian.net" };
 
-  it("requires a root page URL", async () => {
+  it("passes Forge context and Execution UI payload into Export Job Intake", async () => {
+    vi.mocked(startExportJobIntake).mockResolvedValue(ok({ jobId: "job-1" }));
+
+    const result = await callResolver(
+      resolver,
+      "startExportJob",
+      {
+        rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
+        depth: 5,
+        bundleSlug: "bundle",
+      },
+      "account-1",
+      context,
+    );
+
+    expect(result).toEqual({ jobId: "job-1" });
+    expect(startExportJobIntake).toHaveBeenCalledWith(
+      {
+        accountId: "account-1",
+        siteUrl: "https://example.atlassian.net",
+        rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
+        depth: 5,
+        bundleSlug: "bundle",
+      },
+      expect.any(Object),
+    );
+  });
+
+  it("adapts an Export Job Intake failure to the resolver error shape", async () => {
+    vi.mocked(startExportJobIntake).mockResolvedValue(
+      exportFailed("A root page URL is required.", 400),
+    );
+
     const result = await callResolver(
       resolver,
       "startExportJob",
@@ -116,158 +145,6 @@ describe("startExportJob", () => {
     );
 
     expect(result).toEqual({ error: "A root page URL is required." });
-  });
-
-  it("rejects a root page URL from another site", async () => {
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      {
-        rootUrl:
-          "https://other-site.atlassian.net/wiki/spaces/KEY/pages/1/Root",
-      },
-      "account-1",
-      context,
-    );
-
-    expect(result).toEqual({
-      error: "The root page URL must be on this site.",
-    });
-  });
-
-  it("validates the root page and enumerates descendants as the user before creating the job", async () => {
-    vi.mocked(getDescendantIds).mockResolvedValue(ok(["2", "3"]));
-    vi.mocked(createJob).mockResolvedValue(ok({} as never));
-    queuePush.mockResolvedValue({ jobId: "queue-job-99" });
-
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      {
-        rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
-        depth: 5,
-      },
-      "account-1",
-      context,
-    );
-
-    expect(result).toHaveProperty("jobId");
-    const appJobId = (result as { jobId: string }).jobId;
-    expect(getPage).toHaveBeenCalledWith("user", "1");
-    expect(getPage).toHaveBeenCalledWith("app", "1");
-    expect(getDescendantIds).toHaveBeenCalledWith(
-      "1",
-      5,
-      expect.objectContaining({ onSkippedBranch: expect.any(Function) }),
-    );
-    expect(createJob).toHaveBeenCalledWith("account-1", appJobId, {
-      rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root",
-      rootId: "1",
-      depth: 5,
-      bundleSlug: "root",
-      pageIds: ["1", "2", "3"],
-    });
-    expect(queuePush).toHaveBeenCalledWith({
-      body: { accountId: "account-1", jobId: appJobId },
-    });
-    // The bug this guards against: cancellation must use the queue's own job
-    // id (returned from push()), not our application-level job id -- they
-    // are different id spaces.
-    // So the Execution UI can find this job again after a navigation/remount.
-    expect(setLatestJobId).toHaveBeenCalledWith("account-1", appJobId);
-    expect(patchJob).toHaveBeenCalledWith("account-1", appJobId, {
-      queueJobId: "queue-job-99",
-    });
-  });
-
-  it("fails fast without creating a job when the root page cannot be read", async () => {
-    vi.mocked(getPage).mockResolvedValue(exportFailed("403 Forbidden"));
-
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      { rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root" },
-      "account-1",
-      context,
-    );
-
-    expect(result).toEqual({
-      error: "Root page read failed: 403 Forbidden",
-    });
-    expect(createJob).not.toHaveBeenCalled();
-    expect(queuePush).not.toHaveBeenCalled();
-  });
-
-  it("fails fast without creating a job when the root page is readable as the user but not as the app", async () => {
-    vi.mocked(getPage).mockImplementation(async (auth) => {
-      if (auth === "app") {
-        return exportFailed("403 Forbidden");
-      }
-      return ok({ id: "1" } as never);
-    });
-
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      { rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root" },
-      "account-1",
-      context,
-    );
-
-    expect(result).toEqual({
-      error:
-        "This page's space likely has view restrictions that don't include this app. " +
-        "Ask a site or space admin to grant the app access, or choose a root page from " +
-        "a space without view restrictions. (Root page read as the app failed: 403 Forbidden)",
-    });
-    expect(createJob).not.toHaveBeenCalled();
-    expect(queuePush).not.toHaveBeenCalled();
-  });
-
-  it("fails fast without creating a job when descendant listing fails entirely", async () => {
-    vi.mocked(getDescendantIds).mockResolvedValue(
-      exportFailed("500 Server Error"),
-    );
-
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      { rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root" },
-      "account-1",
-      context,
-    );
-
-    expect(result).toEqual({
-      error: "Descendant listing failed: 500 Server Error",
-    });
-    expect(createJob).not.toHaveBeenCalled();
-  });
-
-  it("seeds the job's skipped list from branches skipped during enumeration", async () => {
-    vi.mocked(getDescendantIds).mockImplementation(
-      async (_rootId, _depth, hooks) => {
-        hooks?.onSkippedBranch?.(
-          "9",
-          exportFailed("403 Forbidden")._unsafeUnwrapErr(),
-        );
-        return ok(["2"]);
-      },
-    );
-    vi.mocked(createJob).mockResolvedValue(ok({} as never));
-    queuePush.mockResolvedValue({ jobId: "queue-job-99" });
-
-    const result = await callResolver(
-      resolver,
-      "startExportJob",
-      { rootUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Root" },
-      "account-1",
-      context,
-    );
-
-    const appJobId = (result as { jobId: string }).jobId;
-    expect(patchJob).toHaveBeenCalledWith("account-1", appJobId, {
-      skipped: [{ id: "9", title: null, reason: "403 Forbidden" }],
-    });
   });
 });
 

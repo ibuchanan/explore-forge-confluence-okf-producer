@@ -44,6 +44,10 @@ _Avoid_: Bundled attachment, asset copy
 A user-initiated run that creates one **Export Archive** from selected **Source Content**.
 _Avoid_: Sync, import job
 
+**Export Job Intake**:
+The synchronous step where the **OKF Producer** validates an **Execution UI** request, confirms selected **Source Content** is readable in the **Installed Site**, enumerates **Source Pages**, records skipped branches, creates the **Export Job**, and schedules archive production.
+_Avoid_: Export service, job controller
+
 **Execution UI**:
 A non-durable screen where a user chooses export inputs and starts an **Export Job**.
 _Avoid_: configuration page, settings page
@@ -80,6 +84,7 @@ _Avoid_: v1 conversion fallback, storage fallback
 
 - An **OKF Producer** exports one or more **OKF Bundles**.
 - An **Execution UI** starts an **Export Job** without making the chosen inputs durable configuration.
+- **Export Job Intake** creates and schedules an **Export Job** only after selected **Source Content** has been validated and enumerated.
 - An **Export Archive** contains exactly one **OKF Bundle**.
 - An **Export Job** creates exactly one **Export Archive**.
 - An **OKF Bundle** is created from **Source Content** in the **Installed Site**.

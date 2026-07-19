@@ -9,6 +9,10 @@ import {
   resolvePersonalSpaceHomepage,
 } from "../job/confluenceClient";
 import {
+  startExportJobIntake,
+  type ExportJobIntakeAdapters,
+} from "../job/exportJobIntake";
+import {
   clearLatestJobId,
   createJob,
   getJob,
@@ -17,13 +21,33 @@ import {
   requestCancellation,
   setLatestJobId,
 } from "../job/jobStore";
-import type { SkippedPage } from "../job/types";
+import type { ExportJob } from "../job/types";
 import { asForgeResolverContext } from "../util/forgeContext";
-import { deriveSlugFromUrl, isSameSite, parsePageId } from "../util/pageUrl";
 
-const MAX_DEPTH = 5;
 const exportQueue = new Queue({ key: "okf-export" });
 const logger = createForgeLogger({ name: "resolvers/export" });
+
+const exportJobIntakeAdapters: ExportJobIntakeAdapters = {
+  createJobId: randomUUID,
+  readSourcePageAsUser: async (pageId) => await getPage("user", pageId),
+  readSourcePageAsApp: async (pageId) => await getPage("app", pageId),
+  enumerateDescendantSourcePages: async (rootId, depth, hooks) =>
+    await getDescendantIds(rootId, depth, hooks),
+  createExportJob: async (accountId, jobId, input) =>
+    await createJob(accountId, jobId, input),
+  recordSkippedBranches: async (accountId, jobId, skipped) =>
+    await patchJob(accountId, jobId, { skipped }),
+  recordLatestExportJob: async (accountId, jobId) =>
+    await setLatestJobId(accountId, jobId),
+  scheduleExportJob: async (accountId, jobId) => {
+    const { jobId: queueJobId } = await exportQueue.push({
+      body: { accountId, jobId },
+    });
+    return { queueJobId };
+  },
+  attachQueueJob: async (accountId, jobId, queueJobId) =>
+    await patchJob(accountId, jobId, { queueJobId }),
+};
 
 interface StartExportJobPayload {
   rootUrl?: string;
@@ -33,6 +57,42 @@ interface StartExportJobPayload {
 
 interface JobIdPayload {
   jobId?: string;
+}
+
+type ResolverError = { error: string };
+
+type JobLookupResult =
+  | { ok: true; job: ExportJob | undefined }
+  | { ok: false; error: string };
+
+async function loadJobForResolver({
+  payload,
+  context,
+}: {
+  payload: JobIdPayload | undefined;
+  context: unknown;
+}): Promise<JobLookupResult> {
+  const { accountId } = asForgeResolverContext(context);
+  const jobResult = await getJob(accountId, payload?.jobId ?? "");
+  if (jobResult.isErr()) {
+    return { ok: false, error: jobResult.error.detail };
+  }
+  return { ok: true, job: jobResult.value };
+}
+
+function defineJobResolver<Result>(
+  handleJob: (job: ExportJob | undefined) => Result | Promise<Result>,
+): (args: {
+  payload: JobIdPayload | undefined;
+  context: unknown;
+}) => Promise<Result | ResolverError> {
+  return async ({ payload, context }) => {
+    const lookup = await loadJobForResolver({ payload, context });
+    if (!lookup.ok) {
+      return { error: lookup.error };
+    }
+    return handleJob(lookup.job);
+  };
 }
 
 export function registerExportResolvers(resolver: Resolver): void {
@@ -46,117 +106,35 @@ export function registerExportResolvers(resolver: Resolver): void {
     "startExportJob",
     async ({ payload, context }) => {
       const { accountId, siteUrl } = asForgeResolverContext(context);
-      const rootUrl = String(payload?.rootUrl ?? "").trim();
-      if (!rootUrl) {
-        return { error: "A root page URL is required." };
-      }
-      if (!isSameSite(rootUrl, siteUrl)) {
-        return { error: "The root page URL must be on this site." };
-      }
-      const rootId = parsePageId(rootUrl);
-      if (!rootId) {
-        return { error: "Could not find a page ID in that URL." };
-      }
-
-      const requestedDepth = Number(payload?.depth);
-      const depth = Number.isFinite(requestedDepth)
-        ? Math.min(Math.max(requestedDepth, 1), MAX_DEPTH)
-        : MAX_DEPTH;
-
-      const bundleSlug =
-        String(payload?.bundleSlug ?? "").trim() || deriveSlugFromUrl(rootUrl);
-
-      // Root-page validation and descendant enumeration run as the user,
-      // synchronously, here -- not in the async queue consumer, which has
-      // no user auth context to read with. This is also the last point at
-      // which the export's page set is scoped to what the current user can
-      // see; the consumer only ever fetches content for this pre-vetted list.
-      const userReadResult = await getPage("user", rootId);
-      if (userReadResult.isErr()) {
-        return {
-          error: `Root page read failed: ${userReadResult.error.detail}`,
-        };
-      }
-      // The async consumer fetches content asApp(), not asUser() (see
-      // job/pipeline.ts) -- confirm the app can actually read the root page
-      // now, synchronously, rather than letting the job fail deep in the
-      // async phase for a permission gap between the two auth modes.
-      const appReadResult = await getPage("app", rootId);
-      if (appReadResult.isErr()) {
-        // Confluence typically returns 404 rather than 403 for content a
-        // requester can't see, to avoid revealing that it exists -- so a
-        // read that succeeds asUser() but fails asApp() here almost always
-        // means the page's space has view restrictions that don't extend to
-        // the app's own service-account identity. No manifest scope closes
-        // this gap; it needs a Confluence-side permission change.
-        return {
-          error:
-            "This page's space likely has view restrictions that don't include this app. " +
-            "Ask a site or space admin to grant the app access, or choose a root page from " +
-            `a space without view restrictions. (Root page read as the app failed: ${appReadResult.error.detail})`,
-        };
-      }
-
-      const enumerationSkipped: SkippedPage[] = [];
-      const descendantsResult = await getDescendantIds(rootId, depth, {
-        onSkippedBranch: (pageId, problem) => {
-          enumerationSkipped.push({
-            id: pageId,
-            title: null,
-            reason: problem.detail,
-          });
+      const result = await startExportJobIntake(
+        {
+          accountId,
+          siteUrl,
+          rootUrl: payload?.rootUrl,
+          depth: payload?.depth,
+          bundleSlug: payload?.bundleSlug,
         },
-      });
-      if (descendantsResult.isErr()) {
+        exportJobIntakeAdapters,
+      );
+      if (result.isErr()) {
         return {
-          error: `Descendant listing failed: ${descendantsResult.error.detail}`,
+          error: result.error.detail,
         };
       }
-      const descendantIds = descendantsResult.value;
-
-      const jobId = randomUUID();
-      const jobResult = await createJob(accountId, jobId, {
-        rootUrl,
-        rootId,
-        depth,
-        bundleSlug,
-        pageIds: [rootId, ...descendantIds],
-      });
-      if (jobResult.isErr()) {
-        return {
-          error: `Could not create the export job: ${jobResult.error.detail}`,
-        };
-      }
-      if (enumerationSkipped.length > 0) {
-        await patchJob(accountId, jobId, {
-          skipped: enumerationSkipped,
-        });
-      }
-      // So the Execution UI can find this job again after a navigation or
-      // remount -- see getActiveExportJob below.
-      await setLatestJobId(accountId, jobId);
-      const { jobId: queueJobId } = await exportQueue.push({
-        body: { accountId, jobId },
-      });
-      await patchJob(accountId, jobId, { queueJobId });
-
-      return { jobId };
+      return {
+        jobId: result.value.jobId,
+      };
     },
   );
 
   resolver.define<JobIdPayload>(
     "getExportJob",
-    async ({ payload, context }) => {
-      const { accountId } = asForgeResolverContext(context);
-      const jobResult = await getJob(accountId, payload?.jobId ?? "");
-      if (jobResult.isErr()) {
-        return { error: jobResult.error.detail };
-      }
-      if (!jobResult.value) {
+    defineJobResolver((job) => {
+      if (!job) {
         return { error: "Job not found." };
       }
-      return jobResult.value;
-    },
+      return job;
+    }),
   );
 
   resolver.define<JobIdPayload>(
@@ -193,13 +171,7 @@ export function registerExportResolvers(resolver: Resolver): void {
 
   resolver.define<JobIdPayload>(
     "createArchiveDownloadUrl",
-    async ({ payload, context }) => {
-      const { accountId } = asForgeResolverContext(context);
-      const jobResult = await getJob(accountId, payload?.jobId ?? "");
-      if (jobResult.isErr()) {
-        return { error: jobResult.error.detail };
-      }
-      const job = jobResult.value;
+    defineJobResolver(async (job) => {
       if (job?.status !== "ready" || !job.archiveKey) {
         return { error: "Archive is not ready." };
       }
@@ -208,7 +180,7 @@ export function registerExportResolvers(resolver: Resolver): void {
         return { error: "Could not create a download URL." };
       }
       return { url: result.url };
-    },
+    }),
   );
 
   // Lets the Execution UI rediscover an in-flight or recently-finished job

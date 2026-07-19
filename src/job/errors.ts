@@ -14,7 +14,7 @@ StandardError.add(403, "Forbidden");
 // lets cancellation flow through the same Result<T, ProblemDetails> channel
 // as every other export failure, rather than needing a separate exception
 // type that every caller has to know to catch specially.
-export const CANCELLED_STATUS = 499;
+const CANCELLED_STATUS = 499;
 StandardError.add(CANCELLED_STATUS, "Export Cancelled");
 
 export function exportCancelled(): Result<never, ProblemDetails> {

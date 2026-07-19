@@ -19,11 +19,11 @@ import type {
 } from "./types";
 
 // Root-page validation and descendant enumeration already happened as the
-// user, synchronously, in the resolver (see resolvers/export.ts) before this
-// job existed -- `pageIds` is that pre-vetted set. Everything here runs
-// asApp() in an async queue consumer, which is the only way to get a longer
-// execution budget than a resolver's 25-second cap, at the cost of losing
-// asUser() auth (Forge has no invocation mode with both).
+// user, synchronously, during Export Job Intake before this job existed --
+// `pageIds` is that pre-vetted set. Everything here runs asApp() in an async
+// queue consumer, which is the only way to get a longer execution budget than
+// a resolver's 25-second cap, at the cost of losing asUser() auth (Forge has
+// no invocation mode with both).
 export interface PipelineInput {
   pageIds: string[];
   rootId: string;

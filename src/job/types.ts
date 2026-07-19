@@ -51,10 +51,10 @@ export interface OkfConceptFrontmatter {
   confluence: ConfluenceFrontmatterExtension;
 }
 
-// Root-page validation and descendant enumeration now happen synchronously
-// in the resolver (as the user) before a job is ever created -- see
-// resolvers/export.ts. By the time a job exists, its page set is already
-// known, so job stages only cover the async, asApp() content-fetch phase.
+// Root-page validation and descendant enumeration happen synchronously during
+// Export Job Intake (as the user) before a job is ever created. By the time a
+// job exists, its page set is already known, so job stages only cover the
+// async, asApp() content-fetch phase.
 export type JobStage =
   | "fetching-pages"
   | "converting-markdown"
