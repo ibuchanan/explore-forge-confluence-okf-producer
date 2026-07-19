@@ -24,6 +24,33 @@ export interface SkippedPage {
   reason: string;
 }
 
+// Producer-defined extension to the concept frontmatter (OKF spec §4.1
+// "Extensions"), carrying the Confluence-specific provenance this app adds
+// to every exported concept document. See specs/references/knowledge-catalog/okf/SPEC.md.
+export interface ConfluenceFrontmatterExtension {
+  page_id: string;
+  space_id: string;
+  space_key: string;
+  parent_id: string | null;
+  version: number;
+  status: string;
+  exported_at: string;
+}
+
+// Concept document frontmatter per OKF spec §4.1. `type` is the only field
+// the spec requires; `title`, `description`, `resource`, and `timestamp` are
+// recommended and always populated here. `tags` stays optional -- omitted
+// entirely when a page has no labels, rather than serialized as `tags: []`.
+export interface OkfConceptFrontmatter {
+  type: string;
+  title: string;
+  description: string;
+  resource: string;
+  tags?: string[];
+  timestamp: string;
+  confluence: ConfluenceFrontmatterExtension;
+}
+
 // Root-page validation and descendant enumeration now happen synchronously
 // in the resolver (as the user) before a job is ever created -- see
 // resolvers/export.ts. By the time a job exists, its page set is already

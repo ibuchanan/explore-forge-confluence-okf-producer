@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Queue } from "@forge/events";
 import objectStore from "@forge/object-store";
 import type Resolver from "@forge/resolver";
+import { createForgeLogger } from "@forge-ahead/logging";
 import {
   getDescendantIds,
   getPage,
@@ -17,10 +18,12 @@ import {
   setLatestJobId,
 } from "../job/jobStore";
 import type { SkippedPage } from "../job/types";
+import { asForgeResolverContext } from "../util/forgeContext";
 import { deriveSlugFromUrl, isSameSite, parsePageId } from "../util/pageUrl";
 
 const MAX_DEPTH = 5;
 const exportQueue = new Queue({ key: "okf-export" });
+const logger = createForgeLogger({ name: "resolvers/export" });
 
 interface StartExportJobPayload {
   rootUrl?: string;
@@ -34,18 +37,20 @@ interface JobIdPayload {
 
 export function registerExportResolvers(resolver: Resolver): void {
   resolver.define("getDefaultSource", async ({ context }) => {
-    const rootUrl = await resolvePersonalSpaceHomepage(context.accountId);
+    const { accountId } = asForgeResolverContext(context);
+    const rootUrl = await resolvePersonalSpaceHomepage(accountId);
     return { rootUrl };
   });
 
   resolver.define<StartExportJobPayload>(
     "startExportJob",
     async ({ payload, context }) => {
+      const { accountId, siteUrl } = asForgeResolverContext(context);
       const rootUrl = String(payload?.rootUrl ?? "").trim();
       if (!rootUrl) {
         return { error: "A root page URL is required." };
       }
-      if (!isSameSite(rootUrl, context.siteUrl)) {
+      if (!isSameSite(rootUrl, siteUrl)) {
         return { error: "The root page URL must be on this site." };
       }
       const rootId = parsePageId(rootUrl);
@@ -110,7 +115,7 @@ export function registerExportResolvers(resolver: Resolver): void {
       const descendantIds = descendantsResult.value;
 
       const jobId = randomUUID();
-      const jobResult = await createJob(context.accountId, jobId, {
+      const jobResult = await createJob(accountId, jobId, {
         rootUrl,
         rootId,
         depth,
@@ -123,17 +128,17 @@ export function registerExportResolvers(resolver: Resolver): void {
         };
       }
       if (enumerationSkipped.length > 0) {
-        await patchJob(context.accountId, jobId, {
+        await patchJob(accountId, jobId, {
           skipped: enumerationSkipped,
         });
       }
       // So the Execution UI can find this job again after a navigation or
       // remount -- see getActiveExportJob below.
-      await setLatestJobId(context.accountId, jobId);
+      await setLatestJobId(accountId, jobId);
       const { jobId: queueJobId } = await exportQueue.push({
-        body: { accountId: context.accountId, jobId },
+        body: { accountId, jobId },
       });
-      await patchJob(context.accountId, jobId, { queueJobId });
+      await patchJob(accountId, jobId, { queueJobId });
 
       return { jobId };
     },
@@ -142,7 +147,8 @@ export function registerExportResolvers(resolver: Resolver): void {
   resolver.define<JobIdPayload>(
     "getExportJob",
     async ({ payload, context }) => {
-      const jobResult = await getJob(context.accountId, payload?.jobId ?? "");
+      const { accountId } = asForgeResolverContext(context);
+      const jobResult = await getJob(accountId, payload?.jobId ?? "");
       if (jobResult.isErr()) {
         return { error: jobResult.error.detail };
       }
@@ -156,8 +162,9 @@ export function registerExportResolvers(resolver: Resolver): void {
   resolver.define<JobIdPayload>(
     "cancelExportJob",
     async ({ payload, context }) => {
+      const { accountId } = asForgeResolverContext(context);
       const cancelResult = await requestCancellation(
-        context.accountId,
+        accountId,
         payload?.jobId ?? "",
       );
       if (cancelResult.isErr()) {
@@ -174,7 +181,10 @@ export function registerExportResolvers(resolver: Resolver): void {
         try {
           await exportQueue.getJob(job.queueJobId).cancel();
         } catch (exc) {
-          console.warn(`Could not cancel queue job ${job.queueJobId}:`, exc);
+          logger.child({ queueJobId: job.queueJobId }).errorResult(exc, {
+            message: "Could not cancel queue job.",
+            level: "warn",
+          });
         }
       }
       return job;
@@ -184,7 +194,8 @@ export function registerExportResolvers(resolver: Resolver): void {
   resolver.define<JobIdPayload>(
     "createArchiveDownloadUrl",
     async ({ payload, context }) => {
-      const jobResult = await getJob(context.accountId, payload?.jobId ?? "");
+      const { accountId } = asForgeResolverContext(context);
+      const jobResult = await getJob(accountId, payload?.jobId ?? "");
       if (jobResult.isErr()) {
         return { error: jobResult.error.detail };
       }
@@ -204,20 +215,22 @@ export function registerExportResolvers(resolver: Resolver): void {
   // after a navigation/remount, instead of always starting from a blank
   // form. Not export history -- just the one most recent job per account.
   resolver.define("getActiveExportJob", async ({ context }) => {
-    const latestIdResult = await getLatestJobId(context.accountId);
+    const { accountId } = asForgeResolverContext(context);
+    const latestIdResult = await getLatestJobId(accountId);
     const latestJobId = latestIdResult.isOk()
       ? latestIdResult.value
       : undefined;
     if (!latestJobId) {
       return { job: null };
     }
-    const jobResult = await getJob(context.accountId, latestJobId);
+    const jobResult = await getJob(accountId, latestJobId);
     const job = jobResult.isOk() ? jobResult.value : undefined;
     return { job: job ?? null };
   });
 
   resolver.define("clearActiveExportJob", async ({ context }) => {
-    await clearLatestJobId(context.accountId);
+    const { accountId } = asForgeResolverContext(context);
+    await clearLatestJobId(accountId);
     return { ok: true };
   });
 }

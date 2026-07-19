@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import objectStore from "@forge/object-store";
 import { ok, type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
+import { createForgeLogger } from "@forge-ahead/logging";
 import { exportFailed, isCancelled } from "./errors";
 import { getJob, isCancellationRequested, patchJob } from "./jobStore";
 import type { PipelineResult } from "./pipeline";
@@ -8,6 +9,7 @@ import { run } from "./pipeline";
 import type { ExportJob, SkippedPage } from "./types";
 
 const ARCHIVE_TTL_SECONDS = 24 * 60 * 60;
+const logger = createForgeLogger({ name: "job/consumer" });
 
 export interface ExportQueueEvent {
   body: { accountId: string; jobId: string };
@@ -73,7 +75,7 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
   const jobResult = await getJob(accountId, jobId);
   const job = jobResult.isOk() ? jobResult.value : undefined;
   if (!job) {
-    console.warn(`Export job ${jobId} for ${accountId} not found; skipping.`);
+    logger.warn({ accountId, jobId }, "Export job not found; skipping.");
     return;
   }
 
@@ -118,7 +120,7 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
         });
         return;
       }
-      console.error(`Export job ${jobId} for ${accountId} failed:`, problem);
+      logger.error({ accountId, jobId, problem }, "Export job failed.");
       await patchJob(accountId, jobId, {
         status: "failed",
         stage: "failed",

@@ -3,51 +3,38 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "engines": {
-    "node": ">=24 <25"
-  },
-  "main": "dist/index.mjs",
-  "types": "dist/index.d.mts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
-    }
-  },
   "scripts": {
     "build": "tsc",
-    "changelog": "git cliff",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run size:check && npm run test",
+    "changelog": "touch CHANGELOG.md && git cliff --offline --unreleased --prepend CHANGELOG.md",
+    "check": "lefthook run pre-push --force",
     "clean": "rm -rf ./node_modules && rm package-lock.json && rm -rf ./dist",
-    "dev": "tsdown --watch",
-    "forge:deploy": "source .env && forge deploy --environment \"$FORGE_ENVIRONMENT\"",
-    "forge:install": "source .env && forge install --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
+    "forge:deploy": "secretspec run -- forge deploy",
+    "forge:install": "secretspec run -- forge install --non-interactive",
     "forge:register": "forge register",
-    "forge:uninstall": "source .env && forge uninstall --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\"",
-    "forge:upgrade": "source .env && forge install --upgrade --site \"$FORGE_SITE\" --product \"$FORGE_PRODUCT\" --environment \"$FORGE_ENVIRONMENT\" --non-interactive",
-    "forge:variables:set": "source .env && forge variables set --environment \"$FORGE_ENVIRONMENT\"",
-    "forge:variables:set-encrypted": "source .env && forge variables set --encrypt --environment \"$FORGE_ENVIRONMENT\"",
+    "forge:uninstall": "secretspec run -- forge uninstall",
+    "forge:upgrade": "secretspec run -- forge install --upgrade --non-interactive",
+    "forge:variables:set": "secretspec run -- forge variables set",
     "forge:variables:set:dotenv": "./scripts/forge-vars-from-env.sh",
     "format": "biome format --write",
     "format:check": "biome format",
-    "generate": "npm run generate:openapi && npm run generate:rovo",
-    "generate:openapi": "openapi-typescript",
-    "generate:rovo": "echo 'Not implemented'",
-    "lint": "npm run lint:check && forge lint",
+    "lint": "lefthook run lint",
     "lint:check": "biome lint",
     "lint:fix": "biome lint --write",
-    "lint:prelint": "ast-grep scan --globs '!specs/**' --config ./node_modules/tool-forge-prelint-ast-grep/sgconfig.recommended.yml",
-    "prepare": "lefthook install",
-    "preview": "echo 'Not implemented'",
+    "lint:forge": "forge lint",
+    "lint:prelint": "ast-grep scan --globs '!specs/**' --globs '!node_modules/**' --config ./node_modules/@forge-ahead/prelint/sgconfig.ecosol.yml",
+    "prepare": "lefthook install || true",
+    "size": "npm run size:check",
     "size:check": "npm run build && size-limit",
-    "start": "echo 'Not implemented'",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest watch",
     "todo": "grep -rn 'TODO' --exclude='package.json' . --color=auto || echo 'No TODOs found!'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"
   },
   "dependencies": {
+    "@forge-ahead/atlassian-api-types": "github:ibuchanan/forge-ahead-atlassian-api-types",
+    "@forge-ahead/errors": "github:ibuchanan/forge-ahead-errors",
+    "@forge-ahead/logging": "github:ibuchanan/forge-ahead-logging",
     "@forge/api": "^8.0",
     "@forge/bridge": "6.1",
     "@forge/events": "^3.0",
@@ -55,8 +42,6 @@
     "@forge/object-store": "^2.0",
     "@forge/react": "^12.0",
     "@forge/resolver": "^2.0",
-    "@forge-ahead/atlassian-api-types": "github:ibuchanan/forge-ahead-atlassian-api-types#0.1.0",
-    "@forge-ahead/errors": "github:ibuchanan/forge-ahead-errors#0.1.0",
     "node-html-markdown": "^2.0",
     "node-html-parser": "^9.0",
     "react": "^18.2",
@@ -65,8 +50,9 @@
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.44",
-    "@biomejs/biome": "2.5.2",
-    "@size-limit/preset-app": "^12.1",
+    "@biomejs/biome": "2.5.4",
+    "@forge-ahead/prelint": "github:ibuchanan/tool-forge-prelint-ast-grep",
+    "@size-limit/file": "^12.1.0",
     "@types/node": "^24.13.2",
     "@types/yauzl": "^3.4",
     "@types/yazl": "^3.3",
@@ -75,10 +61,22 @@
     "lefthook": "^2.1",
     "openapi-typescript": "*",
     "size-limit": "^12.1",
-    "tool-forge-prelint-ast-grep": "github:ibuchanan/tool-forge-prelint-ast-grep",
     "typescript": "^5.9",
-    "vitest": "*",
+    "vitest": "^4.1",
     "yauzl": "^3.4"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "allowScripts": {
+    "@ast-grep/cli@0.44.1": true,
+    "fsevents@2.3.3": true,
+    "iframe-resizer@4.4.5": true,
+    "lefthook@2.1.10": true,
+    "github:ibuchanan/forge-ahead-atlassian-api-types#0316ed8a0d7289ea95a4fcaa7e1b722feda44cac": true,
+    "github:ibuchanan/forge-ahead-errors#03edb508b33f4b2e5645986a91f52cfdb50ccfb1": true,
+    "github:ibuchanan/forge-ahead-logging#572f547ed502970d9abc8b37703003dddf308745": true,
+    "github:ibuchanan/tool-forge-prelint-ast-grep#5bf8901bdf50624ce9245e41d12b0f5e168ccb25": true
   },
   "size-limit": [
     {
@@ -88,16 +86,7 @@
         "dist/resolvers/index.js",
         "dist/frontend/index.js"
       ],
-      "limit": "20 kB",
-      "running": false
+      "limit": "20 kB"
     }
-  ],
-  "allowScripts": {
-    "@ast-grep/cli@0.44.1": true,
-    "fsevents@2.3.3": true,
-    "iframe-resizer@4.4.5": true,
-    "lefthook@2.1.9": true,
-    "github:ibuchanan/forge-ahead-errors#1b89e19c0f9bcf9a0522300684f85869469453ce": true,
-    "github:ibuchanan/forge-ahead-atlassian-api-types#c1120db3d1b1a2455acd72b05238d3a48226b983": true
-  }
+  ]
 }

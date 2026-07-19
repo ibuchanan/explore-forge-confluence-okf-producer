@@ -16,8 +16,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "sourceMap": true,
-    "moduleResolution": "bundler",
-    "module": "ESNext",
+    "moduleResolution": "Node",
+    "module": "CommonJS",
 
     /* Strictness */
     "strict": true,

@@ -362,7 +362,7 @@ const App = () => {
               <Button
                 appearance="subtle"
                 onClick={handleCancel}
-                isDisabled={cancelling || job.cancelRequested}
+                isDisabled={cancelling || Boolean(job.cancelRequested)}
               >
                 {cancelling
                   ? "Cancelling…"

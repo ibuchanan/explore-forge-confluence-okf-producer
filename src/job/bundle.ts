@@ -3,7 +3,12 @@ import { stringify } from "yaml";
 import { ZipFile } from "yazl";
 import { slugify } from "../util/pageUrl";
 import { exportFailed } from "./errors";
-import type { BundlePage, BundlePageMap, SkippedPage } from "./types";
+import type {
+  BundlePage,
+  BundlePageMap,
+  OkfConceptFrontmatter,
+  SkippedPage,
+} from "./types";
 
 export function buildTree(pages: BundlePageMap): void {
   for (const page of pages.values()) {
@@ -51,7 +56,7 @@ export function assignPaths(pages: BundlePageMap, rootId: string): void {
   }
 }
 
-function renderFrontmatter(data: Record<string, unknown>): string {
+function renderFrontmatter(data: object): string {
   const dumped = stringify(data, { sortMapEntries: false });
   return `---\n${dumped}---\n`;
 }
@@ -117,25 +122,25 @@ export function renderConceptDocument(
   spaceKeyMap: Map<string, string>,
   exportedAt: string,
 ): string {
-  const frontmatter: Record<string, unknown> = {
+  const frontmatter: OkfConceptFrontmatter = {
     type: "Confluence Page",
     title: page.title,
     description: extractDescription(markdown),
     resource: page.webUrl,
+    timestamp: exportedAt,
+    confluence: {
+      page_id: page.id,
+      space_id: page.spaceId,
+      space_key: spaceKeyMap.get(page.spaceId) ?? "",
+      parent_id: page.parentId,
+      version: page.version,
+      status: page.status,
+      exported_at: exportedAt,
+    },
   };
   if (page.labels.length > 0) {
     frontmatter.tags = page.labels;
   }
-  frontmatter.timestamp = exportedAt;
-  frontmatter.confluence = {
-    page_id: page.id,
-    space_id: page.spaceId,
-    space_key: spaceKeyMap.get(page.spaceId) ?? "",
-    parent_id: page.parentId,
-    version: page.version,
-    status: page.status,
-    exported_at: exportedAt,
-  };
 
   const bodyCore = conversionError
     ? `# ${page.title}\n\n> **Warning:** Markdown conversion failed for this page (${conversionError}).`

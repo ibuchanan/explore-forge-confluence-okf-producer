@@ -18,7 +18,26 @@ pre-commit:
       glob: "*.{ts,tsx}"
       run: npm run typecheck
 
-pre-push:
+lint:
+  parallel: true
   commands:
+    prelint:
+      run: npm run lint:prelint
+    biome:
+      run: npm run lint:check
+    forge:
+      run: npm run lint:forge
+
+pre-push:
+  parallel: true
+  commands:
+    lint:
+      run: npm run lint
+    typecheck:
+      run: npm run typecheck
+    format:
+      run: npm run format:check
     test:
       run: npm run test
+    size:
+      run: npm run size:check

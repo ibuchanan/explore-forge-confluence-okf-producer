@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "moduleResolution": "Node",
+    "module": "CommonJS",
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noUncheckedSideEffectImports": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true
+  }
+}
