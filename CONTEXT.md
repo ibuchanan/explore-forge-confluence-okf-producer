@@ -60,6 +60,10 @@ _Avoid_: job patch, persistence update
 A non-durable screen where a user chooses export inputs and starts an **Export Job**.
 _Avoid_: configuration page, settings page
 
+**Execution UI Run State**:
+The non-durable display state for one submitted or resumable **Export Job** in the **Execution UI**.
+_Avoid_: export job lifecycle, persisted job state
+
 **Installed Site**:
 The Atlassian site where the Forge app is installed and from which it can read Confluence content.
 _Avoid_: source tenant, arbitrary Confluence site
@@ -94,6 +98,7 @@ _Avoid_: v1 conversion fallback, storage fallback
 - An **Execution UI** starts an **Export Job** without making the chosen inputs durable configuration.
 - **Export Job Intake** creates and schedules an **Export Job** only after selected **Source Content** has been validated and enumerated.
 - **Export Job Lifecycle** controls state changes within one **Export Job**; the latest-job pointer only helps the **Execution UI** rediscover the most recent job.
+- **Execution UI Run State** mirrors one **Export Job** for display; **Export Job Lifecycle** remains authoritative.
 - An **Export Archive** contains exactly one **OKF Bundle**.
 - An **Export Job** creates exactly one **Export Archive**.
 - The **OKF Bundle Builder** creates one **OKF Bundle** after an **Export Job** has fetched readable **Source Pages**.
