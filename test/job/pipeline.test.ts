@@ -1,16 +1,7 @@
 import { ok } from "@forge-ahead/errors";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  assignPaths,
-  buildTree,
-  buildZipBuffer,
-  renderConceptDocument,
-  renderDirIndex,
-  renderLog,
-  renderRootIndex,
-} from "../../src/job/bundle";
-import { getPage, getSpaceKey } from "../../src/job/confluenceClient";
-import { convertPageHtml } from "../../src/job/convert";
+import { buildOkfBundleArchive } from "../../src/job/bundle";
+import { getPage } from "../../src/job/confluenceClient";
 
 vi.mock("../../src/job/confluenceClient", () => ({
   getPage: vi.fn(),
@@ -18,13 +9,7 @@ vi.mock("../../src/job/confluenceClient", () => ({
 }));
 vi.mock("../../src/job/convert", () => ({ convertPageHtml: vi.fn() }));
 vi.mock("../../src/job/bundle", () => ({
-  buildTree: vi.fn(),
-  assignPaths: vi.fn(),
-  renderConceptDocument: vi.fn(),
-  renderDirIndex: vi.fn(),
-  renderRootIndex: vi.fn(),
-  renderLog: vi.fn(),
-  buildZipBuffer: vi.fn(),
+  buildOkfBundleArchive: vi.fn(),
 }));
 
 const rootPage = {
@@ -43,15 +28,17 @@ const FAKE_BUFFER = Buffer.from("zip");
 
 beforeEach(() => {
   vi.mocked(getPage).mockReset().mockResolvedValue(ok(rootPage));
-  vi.mocked(getSpaceKey).mockReset().mockResolvedValue(ok("KEY"));
-  vi.mocked(convertPageHtml).mockReset().mockReturnValue(ok("Converted body."));
-  vi.mocked(buildTree).mockReset();
-  vi.mocked(assignPaths).mockReset();
-  vi.mocked(renderConceptDocument).mockReset().mockReturnValue("DOC");
-  vi.mocked(renderDirIndex).mockReset().mockReturnValue("DIR_INDEX");
-  vi.mocked(renderRootIndex).mockReset().mockReturnValue("ROOT_INDEX");
-  vi.mocked(renderLog).mockReset().mockReturnValue("LOG");
-  vi.mocked(buildZipBuffer).mockReset().mockResolvedValue(ok(FAKE_BUFFER));
+  vi.mocked(buildOkfBundleArchive)
+    .mockReset()
+    .mockImplementation(async (input, adapters) => {
+      await adapters.onProgress?.({ stage: "converting-markdown" });
+      await adapters.onProgress?.({ stage: "building-archive" });
+      return ok({
+        zipBuffer: FAKE_BUFFER,
+        exportedCount: input.pages.length,
+        skipped: input.initialSkipped,
+      });
+    });
 });
 
 describe("run", () => {
@@ -80,11 +67,23 @@ describe("run", () => {
       "building-archive",
     ]);
     expect(getPage).toHaveBeenCalledWith("app", "1");
-    expect(getSpaceKey).toHaveBeenCalledWith("app", "10");
     expect(result.zipBuffer).toBe(FAKE_BUFFER);
     expect(result.exportedCount).toBe(1);
     expect(result.skipped).toEqual([]);
-    expect(buildZipBuffer).toHaveBeenCalledWith("root", expect.any(Map));
+    expect(buildOkfBundleArchive).toHaveBeenCalledWith(
+      {
+        pages: [rootPage],
+        rootId: "1",
+        depth: 5,
+        bundleSlug: "root",
+        initialSkipped: [],
+      },
+      expect.objectContaining({
+        convertPageHtml: expect.any(Function),
+        getSpaceKey: expect.any(Function),
+        onProgress,
+      }),
+    );
   });
 
   it("carries forward enumeration-time skips passed in as initialSkipped", async () => {

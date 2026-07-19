@@ -12,6 +12,10 @@ _Avoid_: OKF publisher, Confluence importer
 A portable directory of Markdown files with YAML frontmatter that represents a knowledge corpus.
 _Avoid_: Confluence page set, generated wiki
 
+**OKF Bundle Builder**:
+The archive-construction boundary that turns fetched **Source Pages** into one packaged **OKF Bundle**.
+_Avoid_: export job runner, helper collection
+
 **Agent Skill**:
 A downstream local artifact generated from an **OKF Bundle** for use by an agent runtime.
 _Avoid_: Forge app feature, Confluence macro
@@ -92,6 +96,7 @@ _Avoid_: v1 conversion fallback, storage fallback
 - **Export Job Lifecycle** controls state changes within one **Export Job**; the latest-job pointer only helps the **Execution UI** rediscover the most recent job.
 - An **Export Archive** contains exactly one **OKF Bundle**.
 - An **Export Job** creates exactly one **Export Archive**.
+- The **OKF Bundle Builder** creates one **OKF Bundle** after an **Export Job** has fetched readable **Source Pages**.
 - An **OKF Bundle** is created from **Source Content** in the **Installed Site**.
 - A **Page Tree Layout** preserves **Source Page** hierarchy in the **OKF Bundle**.
 - **Confluence Provenance** connects a **Concept Document** back to its **Source Page**.

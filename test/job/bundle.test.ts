@@ -1,28 +1,42 @@
-import { describe, expect, it } from "vitest";
+import { ok } from "@forge-ahead/errors";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import yauzl from "yauzl";
 import {
-  assignPaths,
-  buildTree,
-  buildZipBuffer,
-  renderConceptDocument,
-  renderDirIndex,
-  renderLog,
-  renderRootIndex,
+  buildOkfBundleArchive,
+  type OkfBundleBuilderAdapters,
 } from "../../src/job/bundle";
-import type { BundlePage, BundlePageMap } from "../../src/job/types";
+import { exportFailed } from "../../src/job/errors";
+import type { ConfluencePage, SkippedPage } from "../../src/job/types";
 
-function readZipEntryNames(buffer: Buffer): Promise<string[]> {
+function readZipEntries(buffer: Buffer): Promise<Map<string, string>> {
   return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(buffer, (err, zipfile) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zipfile) => {
       if (err || !zipfile) {
         reject(err ?? new Error("Failed to open zip buffer"));
         return;
       }
-      const names: string[] = [];
-      zipfile.on("entry", (entry) => names.push(entry.fileName));
-      zipfile.on("end", () => resolve(names));
+
+      const entries = new Map<string, string>();
+      zipfile.on("entry", (entry) => {
+        zipfile.openReadStream(entry, (streamErr, stream) => {
+          if (streamErr || !stream) {
+            reject(streamErr ?? new Error(`Failed to read ${entry.fileName}`));
+            return;
+          }
+
+          const chunks: Buffer[] = [];
+          stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+          stream.on("end", () => {
+            entries.set(entry.fileName, Buffer.concat(chunks).toString("utf8"));
+            zipfile.readEntry();
+          });
+          stream.on("error", reject);
+        });
+      });
+      zipfile.on("end", () => resolve(entries));
       zipfile.on("error", reject);
+      zipfile.readEntry();
     });
   });
 }
@@ -42,7 +56,15 @@ function splitFrontmatter(document: string): {
   };
 }
 
-function makePage(overrides: Partial<BundlePage>): BundlePage {
+function requireEntry(entries: Map<string, string>, path: string): string {
+  const entry = entries.get(path);
+  if (entry === undefined) {
+    throw new Error(`Missing zip entry: ${path}`);
+  }
+  return entry;
+}
+
+function makePage(overrides: Partial<ConfluencePage>): ConfluencePage {
   return {
     id: "1",
     title: "Untitled",
@@ -53,74 +75,115 @@ function makePage(overrides: Partial<BundlePage>): BundlePage {
     webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/Untitled",
     html: "<p>Body</p>",
     labels: [],
-    children: [],
-    slug: "",
-    conceptPath: "",
     ...overrides,
   };
 }
 
-describe("buildTree", () => {
-  it("populates each page's children from parentId, sorted by title", () => {
-    const pages: BundlePageMap = new Map([
-      ["1", makePage({ id: "1", title: "Root" })],
-      ["2", makePage({ id: "2", title: "Zebra", parentId: "1" })],
-      ["3", makePage({ id: "3", title: "Alpha", parentId: "1" })],
+function createAdapters(
+  overrides: Partial<OkfBundleBuilderAdapters> = {},
+): OkfBundleBuilderAdapters {
+  return {
+    convertPageHtml: vi.fn((_html, currentPath) =>
+      ok(
+        currentPath === "pages/apex-hub-1.md"
+          ? "# APEX Hub\n\nSome converted body text."
+          : `Converted body for ${currentPath}.`,
+      ),
+    ),
+    getSpaceKey: vi.fn(async () => ok("KEY")),
+    onProgress: vi.fn(),
+    ...overrides,
+  };
+}
+
+const rootPage = makePage({
+  id: "1",
+  title: "APEX Hub",
+  spaceId: "10",
+  version: 4,
+  webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/APEX+Hub",
+  labels: ["how-to"],
+});
+
+const initialSkipped: SkippedPage[] = [
+  { id: "99", title: "Draft page", reason: "403 Forbidden" },
+];
+
+function sourcePages(): ConfluencePage[] {
+  return [
+    rootPage,
+    makePage({
+      id: "2",
+      title: "Zebra",
+      parentId: "1",
+      webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/2/Zebra",
+    }),
+    makePage({
+      id: "3",
+      title: "Alpha",
+      parentId: "1",
+      webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/3/Alpha",
+    }),
+  ];
+}
+
+async function buildArchiveFixture(adapters = createAdapters()): Promise<{
+  adapters: OkfBundleBuilderAdapters;
+  entries: Map<string, string>;
+  exportedCount: number;
+  skipped: SkippedPage[];
+}> {
+  const result = await buildOkfBundleArchive(
+    {
+      pages: sourcePages(),
+      rootId: "1",
+      depth: 5,
+      bundleSlug: "apex-hub-export",
+      initialSkipped,
+    },
+    adapters,
+  );
+  const archive = result._unsafeUnwrap();
+  return {
+    adapters,
+    entries: await readZipEntries(archive.zipBuffer),
+    exportedCount: archive.exportedCount,
+    skipped: archive.skipped,
+  };
+}
+
+describe("buildOkfBundleArchive archive layout", () => {
+  it("packages Concept Documents, indexes, and the update log under one bundle root", async () => {
+    const { entries, exportedCount, skipped } = await buildArchiveFixture();
+
+    expect(exportedCount).toBe(3);
+    expect(skipped).toEqual(initialSkipped);
+    expect([...entries.keys()].sort()).toEqual([
+      "apex-hub-export/index.md",
+      "apex-hub-export/log.md",
+      "apex-hub-export/pages/apex-hub-1.md",
+      "apex-hub-export/pages/apex-hub-1/alpha-3.md",
+      "apex-hub-export/pages/apex-hub-1/index.md",
+      "apex-hub-export/pages/apex-hub-1/zebra-2.md",
     ]);
-
-    buildTree(pages);
-
-    expect(pages.get("1")?.children).toEqual(["3", "2"]);
   });
 });
 
-describe("assignPaths", () => {
-  it("assigns the root a pages/<slug>-<id>.md path and nests children under it", () => {
-    const pages: BundlePageMap = new Map([
-      ["1", makePage({ id: "1", title: "APEX Hub" })],
-      ["2", makePage({ id: "2", title: "Getting Started", parentId: "1" })],
-    ]);
-
-    buildTree(pages);
-    assignPaths(pages, "1");
-
-    expect(pages.get("1")?.conceptPath).toBe("pages/apex-hub-1.md");
-    expect(pages.get("2")?.conceptPath).toBe(
-      "pages/apex-hub-1/getting-started-2.md",
+describe("buildOkfBundleArchive Concept Documents", () => {
+  it("renders Concept Document frontmatter, body, children, and citation", async () => {
+    const { entries } = await buildArchiveFixture();
+    const rootDoc = requireEntry(
+      entries,
+      "apex-hub-export/pages/apex-hub-1.md",
     );
-  });
-});
-
-describe("renderConceptDocument", () => {
-  it("renders frontmatter, provenance, converted body, and a source citation", () => {
-    const page = makePage({
-      id: "1",
-      title: "APEX Hub",
-      spaceId: "10",
-      version: 4,
-      webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/APEX+Hub",
-      conceptPath: "pages/apex-hub-1.md",
-    });
-    const pages: BundlePageMap = new Map([["1", page]]);
-    const spaceKeyMap = new Map([["10", "KEY"]]);
-    const exportedAt = "2026-07-06T12:40:00Z";
-
-    const doc = renderConceptDocument(
-      page,
-      "Some converted body text.",
-      null,
-      pages,
-      spaceKeyMap,
-      exportedAt,
-    );
-    const { frontmatter, body } = splitFrontmatter(doc);
+    const { frontmatter, body } = splitFrontmatter(rootDoc);
 
     expect(frontmatter).toMatchObject({
       type: "Confluence Page",
       title: "APEX Hub",
-      description: "Some converted body text.",
-      resource: page.webUrl,
-      timestamp: exportedAt,
+      description: "APEX Hub",
+      resource: rootPage.webUrl,
+      tags: ["how-to"],
       confluence: {
         page_id: "1",
         space_id: "10",
@@ -128,244 +191,160 @@ describe("renderConceptDocument", () => {
         parent_id: null,
         version: 4,
         status: "current",
-        exported_at: exportedAt,
       },
     });
-    expect(body).toContain("# APEX Hub");
+    expect(body.match(/^# APEX Hub$/gm)).toHaveLength(1);
     expect(body).toContain("Some converted body text.");
+    expect(body).toContain("* [Alpha](apex-hub-1/alpha-3.md)");
+    expect(body).toContain("* [Zebra](apex-hub-1/zebra-2.md)");
     expect(body).toContain(
-      `# Citations\n\n[1] [Original Confluence page](${page.webUrl})`,
+      `# Citations\n\n[1] [Original Confluence page](${rootPage.webUrl})`,
     );
-    expect(body).not.toContain("# Child pages");
   });
+});
 
-  it("lists child pages as relative links when children exist", () => {
-    const root = makePage({
-      id: "1",
-      title: "APEX Hub",
-      children: ["2"],
-      conceptPath: "pages/apex-hub-1.md",
+describe("buildOkfBundleArchive navigation files", () => {
+  it("renders Page Tree Layout indexes and the bundle update log", async () => {
+    const { entries } = await buildArchiveFixture();
+    const dirIndex = requireEntry(
+      entries,
+      "apex-hub-export/pages/apex-hub-1/index.md",
+    );
+    expect(dirIndex.startsWith("---")).toBe(false);
+    expect(dirIndex).toContain("* [APEX Hub (overview)](../apex-hub-1.md)");
+    expect(dirIndex.indexOf("[Alpha]")).toBeLessThan(
+      dirIndex.indexOf("[Zebra]"),
+    );
+
+    const rootIndex = requireEntry(entries, "apex-hub-export/index.md");
+    expect(splitFrontmatter(rootIndex).frontmatter).toEqual({
+      okf_version: "0.1",
     });
-    const child = makePage({
-      id: "2",
-      title: "Getting Started",
-      parentId: "1",
-      conceptPath: "pages/apex-hub-1/getting-started-2.md",
+    expect(rootIndex).toContain("[APEX Hub](pages/apex-hub-1.md)");
+
+    const log = requireEntry(entries, "apex-hub-export/log.md");
+    expect(log).toContain("* **Scope**: Included pages up to depth 5.");
+    expect(log).toContain("* **Result**: Exported 3 pages, skipped 1 pages.");
+    expect(log).toContain("Skipped: 99 - Draft page (403 Forbidden)");
+  });
+});
+
+describe("buildOkfBundleArchive adapters", () => {
+  it("reports builder stages and gives conversion the assigned path map", async () => {
+    const { adapters } = await buildArchiveFixture();
+    expect(adapters.onProgress).toHaveBeenCalledWith({
+      stage: "converting-markdown",
     });
-    const pages: BundlePageMap = new Map([
-      ["1", root],
-      ["2", child],
-    ]);
+    expect(adapters.onProgress).toHaveBeenCalledWith({
+      stage: "building-archive",
+    });
+    expect(adapters.getSpaceKey).toHaveBeenCalledTimes(1);
 
-    const doc = renderConceptDocument(
-      root,
-      "Body.",
-      null,
-      pages,
-      new Map(),
-      "2026-07-06T12:40:00Z",
-    );
-    const { body } = splitFrontmatter(doc);
-
-    expect(body).toContain("# Child pages");
-    expect(body).toContain(
-      "* [Getting Started](apex-hub-1/getting-started-2.md)",
-    );
+    const convertCalls = vi.mocked(adapters.convertPageHtml).mock.calls;
+    expect(convertCalls[0]?.[1]).toBe("pages/apex-hub-1.md");
+    expect(convertCalls[0]?.[2].get("3")).toBe("pages/apex-hub-1/alpha-3.md");
   });
+});
 
-  it("includes tags in frontmatter only when labels are present", () => {
-    const pages: BundlePageMap = new Map();
-    const withLabels = makePage({ id: "1", labels: ["how-to", "gday"] });
-    const withoutLabels = makePage({ id: "2", labels: [] });
+describe("buildOkfBundleArchive conversion resilience", () => {
+  it("embeds conversion failures without marking the page skipped", async () => {
+    const adapters = createAdapters({
+      convertPageHtml: vi.fn(() => exportFailed("unexpected token")),
+    });
 
-    const { frontmatter: withTags } = splitFrontmatter(
-      renderConceptDocument(
-        withLabels,
-        "Body.",
-        null,
-        pages,
-        new Map(),
-        "2026-07-06T12:40:00Z",
-      ),
+    const result = await buildOkfBundleArchive(
+      {
+        pages: [rootPage],
+        rootId: "1",
+        depth: 1,
+        bundleSlug: "apex-hub-export",
+        initialSkipped: [],
+      },
+      adapters,
     );
-    const { frontmatter: withoutTags } = splitFrontmatter(
-      renderConceptDocument(
-        withoutLabels,
-        "Body.",
-        null,
-        pages,
-        new Map(),
-        "2026-07-06T12:40:00Z",
-      ),
+    const archive = result._unsafeUnwrap();
+    const entries = await readZipEntries(archive.zipBuffer);
+    const { frontmatter, body } = splitFrontmatter(
+      entries.get("apex-hub-export/pages/apex-hub-1.md") ?? "",
     );
 
-    expect(withTags.tags).toEqual(["how-to", "gday"]);
-    expect(withoutTags).not.toHaveProperty("tags");
-  });
-
-  it("renders a warning body instead of markdown when conversion failed", () => {
-    const page = makePage({ id: "1", title: "APEX Hub" });
-    const pages: BundlePageMap = new Map([["1", page]]);
-
-    const doc = renderConceptDocument(
-      page,
-      null,
-      "unexpected token",
-      pages,
-      new Map(),
-      "2026-07-06T12:40:00Z",
-    );
-    const { body } = splitFrontmatter(doc);
-
+    expect(archive.exportedCount).toBe(1);
+    expect(archive.skipped).toEqual([]);
+    expect(frontmatter.description).toBe("Content unavailable.");
     expect(body).toContain(
       "> **Warning:** Markdown conversion failed for this page (unexpected token).",
     );
   });
 
-  it("does not duplicate a leading H1 that already matches the page title", () => {
-    const page = makePage({ id: "1", title: "APEX Hub" });
-    const pages: BundlePageMap = new Map([["1", page]]);
-
-    const doc = renderConceptDocument(
-      page,
-      "# APEX Hub\n\nBody text.",
-      null,
-      pages,
-      new Map(),
-      "2026-07-06T12:40:00Z",
+  it("embeds a missing Export View warning without invoking conversion", async () => {
+    const adapters = createAdapters();
+    const result = await buildOkfBundleArchive(
+      {
+        pages: [makePage({ ...rootPage, html: null })],
+        rootId: "1",
+        depth: 1,
+        bundleSlug: "apex-hub-export",
+        initialSkipped: [],
+      },
+      adapters,
     );
-    const { body } = splitFrontmatter(doc);
-
-    expect(body.match(/^# APEX Hub$/gm)).toHaveLength(1);
-  });
-
-  it("extracts a plain-text description from the first meaningful markdown line", () => {
-    const page = makePage({ id: "1", title: "APEX Hub" });
-    const pages: BundlePageMap = new Map([["1", page]]);
-
-    const doc = renderConceptDocument(
-      page,
-      "\n\n**Welcome** to the [APEX](https://example.com) hub.",
-      null,
-      pages,
-      new Map(),
-      "2026-07-06T12:40:00Z",
+    const archive = result._unsafeUnwrap();
+    const entries = await readZipEntries(archive.zipBuffer);
+    const { body } = splitFrontmatter(
+      entries.get("apex-hub-export/pages/apex-hub-1.md") ?? "",
     );
-    const { frontmatter } = splitFrontmatter(doc);
 
-    expect(frontmatter.description).toBe("Welcome to the APEX hub.");
-  });
-
-  it("falls back to 'Content unavailable.' when there is no markdown", () => {
-    const page = makePage({ id: "1", title: "APEX Hub" });
-    const pages: BundlePageMap = new Map([["1", page]]);
-
-    const doc = renderConceptDocument(
-      page,
-      null,
-      "boom",
-      pages,
-      new Map(),
-      "2026-07-06T12:40:00Z",
+    expect(adapters.convertPageHtml).not.toHaveBeenCalled();
+    expect(body).toContain(
+      "> **Warning:** Markdown conversion failed for this page (export_view HTML was not available for this page.).",
     );
-    const { frontmatter } = splitFrontmatter(doc);
-
-    expect(frontmatter.description).toBe("Content unavailable.");
   });
 });
 
-describe("renderRootIndex", () => {
-  it("carries only okf_version frontmatter and links to the root concept document", () => {
-    const root = makePage({
-      id: "1",
-      title: "APEX Hub",
-      conceptPath: "pages/apex-hub-1.md",
+describe("buildOkfBundleArchive provenance resilience", () => {
+  it("keeps space key lookup best effort", async () => {
+    const adapters = createAdapters({
+      getSpaceKey: vi.fn(async () => exportFailed("403 Forbidden")),
     });
 
-    const doc = renderRootIndex(root, "APEX Hub Export");
-    const { frontmatter, body } = splitFrontmatter(doc);
-
-    expect(frontmatter).toEqual({ okf_version: "0.1" });
-    expect(body).toContain("# APEX Hub Export");
-    expect(body).toContain("[APEX Hub](pages/apex-hub-1.md)");
-  });
-});
-
-describe("renderDirIndex", () => {
-  it("carries no frontmatter and links to the overview and children", () => {
-    const root = makePage({
-      id: "1",
-      title: "APEX Hub",
-      children: ["2"],
-      conceptPath: "pages/apex-hub-1.md",
-    });
-    const child = makePage({
-      id: "2",
-      title: "Getting Started",
-      parentId: "1",
-      conceptPath: "pages/apex-hub-1/getting-started-2.md",
-    });
-    const pages: BundlePageMap = new Map([
-      ["1", root],
-      ["2", child],
-    ]);
-
-    const doc = renderDirIndex(root, pages);
-
-    expect(doc.startsWith("---")).toBe(false);
-    expect(doc).toContain("* [APEX Hub (overview)](../apex-hub-1.md)");
-    expect(doc).toContain("* [Getting Started](getting-started-2.md)");
-  });
-});
-
-describe("renderLog", () => {
-  it("summarizes the export and lists skipped pages with their reasons", () => {
-    const root = makePage({
-      id: "1",
-      title: "APEX Hub",
-      webUrl: "https://example.atlassian.net/wiki/spaces/KEY/pages/1/APEX+Hub",
-    });
-
-    const log = renderLog(
-      root,
-      5,
-      42,
-      [{ id: "99", title: "Draft page", reason: "403 Forbidden" }],
-      "2026-07-06",
+    const result = await buildOkfBundleArchive(
+      {
+        pages: [rootPage],
+        rootId: "1",
+        depth: 1,
+        bundleSlug: "apex-hub-export",
+        initialSkipped: [],
+      },
+      adapters,
+    );
+    const archive = result._unsafeUnwrap();
+    const entries = await readZipEntries(archive.zipBuffer);
+    const { frontmatter } = splitFrontmatter(
+      entries.get("apex-hub-export/pages/apex-hub-1.md") ?? "",
     );
 
-    expect(log).toContain("## 2026-07-06");
-    expect(log).toContain(
-      `* **Export**: Created from Confluence page tree rooted at [APEX Hub](${root.webUrl}).`,
-    );
-    expect(log).toContain("* **Scope**: Included pages up to depth 5.");
-    expect(log).toContain("* **Result**: Exported 42 pages, skipped 1 pages.");
-    expect(log).toContain("Skipped: 99 - Draft page (403 Forbidden)");
+    expect(frontmatter).toMatchObject({
+      confluence: { space_key: "" },
+    });
   });
 });
 
-describe("buildZipBuffer", () => {
-  it("packages files under exactly one <bundleSlug>/ root directory", async () => {
-    const files = new Map([
-      ["index.md", "# Bundle\n"],
-      ["pages/apex-hub-1.md", "# APEX Hub\n"],
-    ]);
-
-    const result = await buildZipBuffer("apex-hub-export", files);
-    const names = await readZipEntryNames(result._unsafeUnwrap());
-
-    expect(names.sort()).toEqual([
-      "apex-hub-export/index.md",
-      "apex-hub-export/pages/apex-hub-1.md",
-    ]);
-  });
-
-  it("returns Err with a ProblemDetails when a file path is invalid", async () => {
-    const files = new Map([["", "# Bundle\n"]]);
-
-    const result = await buildZipBuffer("apex-hub-export", files);
+describe("buildOkfBundleArchive validation", () => {
+  it("fails when the root Source Page is missing from the bundle input", async () => {
+    const result = await buildOkfBundleArchive(
+      {
+        pages: [makePage({ id: "2" })],
+        rootId: "1",
+        depth: 1,
+        bundleSlug: "apex-hub-export",
+        initialSkipped: [],
+      },
+      createAdapters(),
+    );
 
     expect(result.isErr()).toBe(true);
-    expect(result._unsafeUnwrapErr()).toMatchObject({ status: 500 });
+    expect(result._unsafeUnwrapErr().detail).toBe(
+      "Root page 1 is missing from the bundle.",
+    );
   });
 });

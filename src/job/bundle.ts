@@ -1,4 +1,8 @@
-import { type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
+import {
+  type ProblemDetails,
+  type Result,
+  ResultAsync,
+} from "@forge-ahead/errors";
 import { stringify } from "yaml";
 import { ZipFile } from "yazl";
 import { slugify } from "../util/pageUrl";
@@ -6,11 +10,48 @@ import { exportFailed } from "./errors";
 import type {
   BundlePage,
   BundlePageMap,
+  ConfluencePage,
   OkfConceptFrontmatter,
   SkippedPage,
 } from "./types";
 
-export function buildTree(pages: BundlePageMap): void {
+export interface OkfBundleBuilderInput {
+  pages: ConfluencePage[];
+  rootId: string;
+  depth: number;
+  bundleSlug: string;
+  initialSkipped: SkippedPage[];
+}
+
+export interface OkfBundleBuilderAdapters {
+  convertPageHtml: (
+    html: string | null,
+    currentPath: string,
+    idToPath: Map<string, string>,
+  ) => Result<string | null, ProblemDetails>;
+  getSpaceKey: (spaceId: string) => Promise<Result<string, ProblemDetails>>;
+  onProgress?: (progress: OkfBundleBuildProgress) => void | Promise<void>;
+}
+
+export interface OkfBundleArchive {
+  zipBuffer: Buffer;
+  exportedCount: number;
+  skipped: SkippedPage[];
+}
+
+export interface OkfBundleBuildProgress {
+  stage: "converting-markdown" | "building-archive";
+}
+
+function toBundlePage(page: ConfluencePage): BundlePage {
+  return { ...page, children: [], slug: "", conceptPath: "" };
+}
+
+function buildPageMap(pages: ConfluencePage[]): BundlePageMap {
+  return new Map(pages.map((page) => [page.id, toBundlePage(page)]));
+}
+
+function buildTree(pages: BundlePageMap): void {
   for (const page of pages.values()) {
     if (page.parentId && pages.has(page.parentId)) {
       pages.get(page.parentId)?.children.push(page.id);
@@ -25,7 +66,7 @@ export function buildTree(pages: BundlePageMap): void {
   }
 }
 
-export function assignPaths(pages: BundlePageMap, rootId: string): void {
+function assignPaths(pages: BundlePageMap, rootId: string): void {
   const root = pages.get(rootId);
   if (!root) {
     return;
@@ -114,7 +155,33 @@ function relativeChildPath(
     : childConceptPath;
 }
 
-export function renderConceptDocument(
+async function buildSpaceKeyMap(
+  pages: BundlePageMap,
+  getSpaceKey: OkfBundleBuilderAdapters["getSpaceKey"],
+): Promise<Map<string, string>> {
+  const spaceKeyMap = new Map<string, string>();
+  for (const page of pages.values()) {
+    if (spaceKeyMap.has(page.spaceId)) {
+      continue;
+    }
+    const spaceKeyResult = await getSpaceKey(page.spaceId);
+    spaceKeyMap.set(
+      page.spaceId,
+      spaceKeyResult.isOk() ? spaceKeyResult.value : "",
+    );
+  }
+  return spaceKeyMap;
+}
+
+function buildIdToPathMap(pages: BundlePageMap): Map<string, string> {
+  const idToPath = new Map<string, string>();
+  for (const [id, page] of pages) {
+    idToPath.set(id, page.conceptPath);
+  }
+  return idToPath;
+}
+
+function renderConceptDocument(
   page: BundlePage,
   markdown: string | null,
   conversionError: string | null,
@@ -169,7 +236,7 @@ export function renderConceptDocument(
   return `${renderFrontmatter(frontmatter)}\n${sections.join("\n\n")}\n`;
 }
 
-export function renderDirIndex(page: BundlePage, pages: BundlePageMap): string {
+function renderDirIndex(page: BundlePage, pages: BundlePageMap): string {
   const overviewName = page.conceptPath.split("/").pop();
   const lines = [
     `# ${page.title} — Contents`,
@@ -187,16 +254,13 @@ export function renderDirIndex(page: BundlePage, pages: BundlePageMap): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderRootIndex(
-  rootPage: BundlePage,
-  bundleTitle: string,
-): string {
+function renderRootIndex(rootPage: BundlePage, bundleTitle: string): string {
   const frontmatter = { okf_version: "0.1" };
   const body = `# ${bundleTitle}\n\n* [${rootPage.title}](${rootPage.conceptPath})\n`;
   return `${renderFrontmatter(frontmatter)}\n${body}`;
 }
 
-export function renderLog(
+function renderLog(
   rootPage: BundlePage,
   depth: number,
   exportedCount: number,
@@ -219,7 +283,87 @@ export function renderLog(
   return `${lines.join("\n")}\n`;
 }
 
-export function buildZipBuffer(
+function renderPageFile(
+  page: BundlePage,
+  pages: BundlePageMap,
+  adapters: OkfBundleBuilderAdapters,
+  spaceKeyMap: Map<string, string>,
+  idToPath: Map<string, string>,
+  exportedAt: string,
+): string {
+  let markdown: string | null = null;
+  let conversionError: string | null = null;
+
+  if (page.html) {
+    const convertResult = adapters.convertPageHtml(
+      page.html,
+      page.conceptPath,
+      idToPath,
+    );
+    markdown = convertResult.isOk() ? convertResult.value : null;
+    conversionError = convertResult.isErr() ? convertResult.error.detail : null;
+  } else {
+    conversionError = "export_view HTML was not available for this page.";
+  }
+
+  return renderConceptDocument(
+    page,
+    markdown,
+    conversionError,
+    pages,
+    spaceKeyMap,
+    exportedAt,
+  );
+}
+
+function addConceptFiles(
+  files: Map<string, string>,
+  pages: BundlePageMap,
+  adapters: OkfBundleBuilderAdapters,
+  spaceKeyMap: Map<string, string>,
+  idToPath: Map<string, string>,
+  exportedAt: string,
+): void {
+  for (const page of pages.values()) {
+    files.set(
+      page.conceptPath,
+      renderPageFile(page, pages, adapters, spaceKeyMap, idToPath, exportedAt),
+    );
+
+    if (page.children.length > 0) {
+      const indexDir = page.conceptPath.slice(0, -".md".length);
+      files.set(`${indexDir}/index.md`, renderDirIndex(page, pages));
+    }
+  }
+}
+
+function renderBundleFiles(
+  pages: BundlePageMap,
+  rootPage: BundlePage,
+  input: OkfBundleBuilderInput,
+  adapters: OkfBundleBuilderAdapters,
+  spaceKeyMap: Map<string, string>,
+): Map<string, string> {
+  const exportedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const idToPath = buildIdToPathMap(pages);
+  const files = new Map<string, string>();
+  addConceptFiles(files, pages, adapters, spaceKeyMap, idToPath, exportedAt);
+
+  files.set("index.md", renderRootIndex(rootPage, rootPage.title));
+  files.set(
+    "log.md",
+    renderLog(
+      rootPage,
+      input.depth,
+      pages.size,
+      input.initialSkipped,
+      exportedAt.slice(0, 10),
+    ),
+  );
+  return files;
+}
+
+function buildZipBuffer(
   bundleSlug: string,
   files: Map<string, string>,
 ): ResultAsync<Buffer, ProblemDetails> {
@@ -244,4 +388,38 @@ export function buildZipBuffer(
       `Failed to build archive: ${(exc as Error).message}`,
     )._unsafeUnwrapErr(),
   );
+}
+
+export async function buildOkfBundleArchive(
+  input: OkfBundleBuilderInput,
+  adapters: OkfBundleBuilderAdapters,
+): Promise<Result<OkfBundleArchive, ProblemDetails>> {
+  const pages = buildPageMap(input.pages);
+  const rootPage = pages.get(input.rootId);
+  if (!rootPage) {
+    return exportFailed(
+      `Root page ${input.rootId} is missing from the bundle.`,
+    );
+  }
+
+  buildTree(pages);
+  assignPaths(pages, input.rootId);
+
+  await adapters.onProgress?.({ stage: "converting-markdown" });
+  const spaceKeyMap = await buildSpaceKeyMap(pages, adapters.getSpaceKey);
+
+  const files = renderBundleFiles(
+    pages,
+    rootPage,
+    input,
+    adapters,
+    spaceKeyMap,
+  );
+  await adapters.onProgress?.({ stage: "building-archive" });
+  const zipResult = await buildZipBuffer(input.bundleSlug, files);
+  return zipResult.map((zipBuffer) => ({
+    zipBuffer,
+    exportedCount: pages.size,
+    skipped: input.initialSkipped,
+  }));
 }

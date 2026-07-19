@@ -1,22 +1,9 @@
 import type { ProblemDetails, Result } from "@forge-ahead/errors";
-import {
-  assignPaths,
-  buildTree,
-  buildZipBuffer,
-  renderConceptDocument,
-  renderDirIndex,
-  renderLog,
-  renderRootIndex,
-} from "./bundle";
+import { buildOkfBundleArchive } from "./bundle";
 import { getPage, getSpaceKey } from "./confluenceClient";
 import { convertPageHtml } from "./convert";
 import { exportCancelled, exportFailed } from "./errors";
-import type {
-  BundlePageMap,
-  ConfluencePage,
-  ExportJobProgress,
-  SkippedPage,
-} from "./types";
+import type { ConfluencePage, ExportJobProgress, SkippedPage } from "./types";
 
 // Root-page validation and descendant enumeration already happened as the
 // user, synchronously, during Export Job Intake before this job existed --
@@ -53,7 +40,7 @@ export async function run(
   { onProgress, isCancelled }: PipelineHooks,
 ): Promise<Result<PipelineResult, ProblemDetails>> {
   const skipped: SkippedPage[] = [...initialSkipped];
-  const pages: BundlePageMap = new Map();
+  const pages = new Map<string, ConfluencePage>();
 
   await onProgress({ stage: "fetching-pages", exportedCount: 0 });
   for (let i = 0; i < pageIds.length; i += 1) {
@@ -70,7 +57,7 @@ export async function run(
     );
     if (pageResult.isOk()) {
       const page = pageResult.value;
-      pages.set(page.id, { ...page, children: [], slug: "", conceptPath: "" });
+      pages.set(page.id, page);
     } else {
       skipped.push({
         id: pageId,
@@ -94,79 +81,19 @@ export async function run(
     );
   }
 
-  buildTree(pages);
-  assignPaths(pages, rootId);
-
-  const idToPath = new Map<string, string>();
-  for (const [id, page] of pages) {
-    idToPath.set(id, page.conceptPath);
-  }
-
-  await onProgress({ stage: "converting-markdown" });
-  const spaceKeyMap = new Map<string, string>();
-  for (const page of pages.values()) {
-    if (!spaceKeyMap.has(page.spaceId)) {
-      const spaceKeyResult: Result<string, ProblemDetails> = await getSpaceKey(
-        "app",
-        page.spaceId,
-      );
-      spaceKeyMap.set(
-        page.spaceId,
-        spaceKeyResult.isOk() ? spaceKeyResult.value : "",
-      );
-    }
-  }
-
-  const exportedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const files = new Map<string, string>();
-
-  for (const page of pages.values()) {
-    let markdown: string | null = null;
-    let conversionError: string | null = null;
-    if (page.html) {
-      const convertResult = convertPageHtml(
-        page.html,
-        page.conceptPath,
-        idToPath,
-      );
-      if (convertResult.isOk()) {
-        markdown = convertResult.value;
-      } else {
-        conversionError = convertResult.error.detail;
-      }
-    } else {
-      conversionError = "export_view HTML was not available for this page.";
-    }
-
-    files.set(
-      page.conceptPath,
-      renderConceptDocument(
-        page,
-        markdown,
-        conversionError,
-        pages,
-        spaceKeyMap,
-        exportedAt,
-      ),
-    );
-
-    if (page.children.length > 0) {
-      const indexDir = page.conceptPath.slice(0, -".md".length);
-      files.set(`${indexDir}/index.md`, renderDirIndex(page, pages));
-    }
-  }
-
-  files.set("index.md", renderRootIndex(rootPage, rootPage.title));
-  files.set(
-    "log.md",
-    renderLog(rootPage, depth, pages.size, skipped, exportedAt.slice(0, 10)),
+  const archiveResult = await buildOkfBundleArchive(
+    {
+      pages: [...pages.values()],
+      rootId,
+      depth,
+      bundleSlug,
+      initialSkipped: skipped,
+    },
+    {
+      convertPageHtml,
+      getSpaceKey: async (spaceId) => await getSpaceKey("app", spaceId),
+      onProgress,
+    },
   );
-
-  await onProgress({ stage: "building-archive" });
-  const zipResult = await buildZipBuffer(bundleSlug, files);
-  return zipResult.map((zipBuffer) => ({
-    zipBuffer,
-    exportedCount: pages.size,
-    skipped,
-  }));
+  return archiveResult;
 }
