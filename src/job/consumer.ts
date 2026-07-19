@@ -4,7 +4,15 @@ import objectStore from "@forge/object-store";
 import { ok, type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
 import { createForgeLogger } from "@forge-ahead/logging";
 import { exportFailed, isCancelled } from "./errors";
-import { getJob, isCancellationRequested, patchJob } from "./jobStore";
+import {
+  isCancellationRequested,
+  markCancelled,
+  markFailed,
+  markReady,
+  markRunning,
+  recordProgress,
+} from "./exportJobLifecycle";
+import { getJob } from "./jobStore";
 import type { PipelineResult } from "./pipeline";
 import { run } from "./pipeline";
 import type { ExportJob, SkippedPage } from "./types";
@@ -81,7 +89,7 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
     return;
   }
 
-  await patchJob(accountId, jobId, { status: "running" });
+  await markRunning(accountId, jobId);
 
   const pipelineResult = await run(
     {
@@ -92,8 +100,8 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
       initialSkipped: job.skipped,
     },
     {
-      onProgress: (patch) => {
-        patchJob(accountId, jobId, patch);
+      onProgress: async (progress) => {
+        await recordProgress(accountId, jobId, progress);
       },
       isCancelled: async () => {
         const cancelResult = await isCancellationRequested(accountId, jobId);
@@ -108,26 +116,15 @@ export async function exportConsumer(event: ExportQueueEvent): Promise<void> {
 
   await outcome.match(
     async (uploaded) => {
-      await patchJob(accountId, jobId, {
-        status: "ready",
-        stage: "ready",
-        ...uploaded,
-      });
+      await markReady(accountId, jobId, uploaded);
     },
     async (problem) => {
       if (isCancelled(problem)) {
-        await patchJob(accountId, jobId, {
-          status: "cancelled",
-          stage: "cancelled",
-        });
+        await markCancelled(accountId, jobId);
         return;
       }
       logger.error({ accountId, jobId, problem }, "Export job failed.");
-      await patchJob(accountId, jobId, {
-        status: "failed",
-        stage: "failed",
-        errorMessage: problem.detail,
-      });
+      await markFailed(accountId, jobId, problem.detail);
     },
   );
 }

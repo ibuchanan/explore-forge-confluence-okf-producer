@@ -3,14 +3,17 @@ import { ok } from "@forge-ahead/errors";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePersonalSpaceHomepage } from "../../src/job/confluenceClient";
 import { exportFailed } from "../../src/job/errors";
+import {
+  attachQueueJob,
+  createQueuedExportJob,
+  recordSkippedBranches,
+  requestCancellation,
+} from "../../src/job/exportJobLifecycle";
 import { startExportJobIntake } from "../../src/job/exportJobIntake";
 import {
   clearLatestJobId,
-  createJob,
   getJob,
   getLatestJobId,
-  patchJob,
-  requestCancellation,
   setLatestJobId,
 } from "../../src/job/jobStore";
 
@@ -26,11 +29,14 @@ vi.mock("../../src/job/confluenceClient", () => ({
 vi.mock("../../src/job/exportJobIntake", () => ({
   startExportJobIntake: vi.fn(),
 }));
-vi.mock("../../src/job/jobStore", () => ({
-  createJob: vi.fn(),
-  getJob: vi.fn(),
-  patchJob: vi.fn(),
+vi.mock("../../src/job/exportJobLifecycle", () => ({
+  createQueuedExportJob: vi.fn(),
+  recordSkippedBranches: vi.fn(),
+  attachQueueJob: vi.fn(),
   requestCancellation: vi.fn(),
+}));
+vi.mock("../../src/job/jobStore", () => ({
+  getJob: vi.fn(),
   setLatestJobId: vi.fn(),
   getLatestJobId: vi.fn(),
   clearLatestJobId: vi.fn(),
@@ -68,10 +74,11 @@ beforeEach(async () => {
   registerExportResolvers(resolver);
   vi.mocked(resolvePersonalSpaceHomepage).mockReset();
   vi.mocked(startExportJobIntake).mockReset();
-  vi.mocked(createJob).mockReset();
-  vi.mocked(getJob).mockReset();
-  vi.mocked(patchJob).mockReset();
+  vi.mocked(createQueuedExportJob).mockReset();
+  vi.mocked(recordSkippedBranches).mockReset();
+  vi.mocked(attachQueueJob).mockReset();
   vi.mocked(requestCancellation).mockReset();
+  vi.mocked(getJob).mockReset();
   vi.mocked(setLatestJobId).mockReset();
   vi.mocked(getLatestJobId).mockReset();
   vi.mocked(clearLatestJobId).mockReset();
@@ -185,6 +192,7 @@ describe("cancelExportJob", () => {
       ok({
         jobId: "job-1",
         queueJobId: "queue-job-99",
+        status: "running",
         cancelRequested: true,
       } as never),
     );
@@ -213,6 +221,27 @@ describe("cancelExportJob", () => {
     );
 
     expect(result).toEqual({ error: "Job not found." });
+  });
+
+  it("does not cancel queued work when lifecycle ignored a terminal job", async () => {
+    vi.mocked(requestCancellation).mockResolvedValue(
+      ok({
+        jobId: "job-1",
+        queueJobId: "queue-job-99",
+        status: "ready",
+        cancelRequested: false,
+      } as never),
+    );
+
+    const result = await callResolver(
+      resolver,
+      "cancelExportJob",
+      { jobId: "job-1" },
+      "account-1",
+    );
+
+    expect(queueGetJob).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ jobId: "job-1", status: "ready" });
   });
 });
 

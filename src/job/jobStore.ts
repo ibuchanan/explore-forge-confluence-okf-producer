@@ -1,7 +1,7 @@
 import { kvs } from "@forge/kvs";
-import { ok, type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
+import { type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
 import { exportFailed } from "./errors";
-import type { ExportJob, ExportJobInput } from "./types";
+import type { ExportJob } from "./types";
 
 function jobKey(accountId: string, jobId: string): string {
   return `export-job:${accountId}:${jobId}`;
@@ -22,33 +22,10 @@ function kvsSet(
   );
 }
 
-export function createJob(
-  accountId: string,
-  jobId: string,
-  input: ExportJobInput,
+export function saveJob(
+  job: ExportJob,
 ): ResultAsync<ExportJob, ProblemDetails> {
-  const now = new Date().toISOString();
-  const job: ExportJob = {
-    jobId,
-    accountId,
-    status: "queued",
-    stage: "fetching-pages",
-    rootUrl: input.rootUrl,
-    rootId: input.rootId,
-    depth: input.depth,
-    bundleSlug: input.bundleSlug,
-    pageIds: input.pageIds,
-    exportedCount: 0,
-    skipped: [],
-    warnings: [],
-    errorMessage: null,
-    archiveKey: null,
-    queueJobId: null,
-    cancelRequested: false,
-    createdAt: now,
-    updatedAt: now,
-  };
-  return kvsSet(jobKey(accountId, jobId), job).map(() => job);
+  return kvsSet(jobKey(job.accountId, job.jobId), job).map(() => job);
 }
 
 export function getJob(
@@ -63,38 +40,6 @@ export function getJob(
         `Failed to read ${key}: ${(exc as Error).message}`,
       )._unsafeUnwrapErr(),
   );
-}
-
-export function patchJob(
-  accountId: string,
-  jobId: string,
-  patch: Partial<ExportJob>,
-): ResultAsync<ExportJob | null, ProblemDetails> {
-  return getJob(accountId, jobId).andThen((existing) => {
-    if (!existing) {
-      return ok(null);
-    }
-    const updated: ExportJob = {
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
-    return kvsSet(jobKey(accountId, jobId), updated).map(() => updated);
-  });
-}
-
-export function requestCancellation(
-  accountId: string,
-  jobId: string,
-): ResultAsync<ExportJob | null, ProblemDetails> {
-  return patchJob(accountId, jobId, { cancelRequested: true });
-}
-
-export function isCancellationRequested(
-  accountId: string,
-  jobId: string,
-): ResultAsync<boolean, ProblemDetails> {
-  return getJob(accountId, jobId).map((job) => Boolean(job?.cancelRequested));
 }
 
 // Points at the account's most recent export job so the Execution UI can

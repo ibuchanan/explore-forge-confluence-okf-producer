@@ -13,12 +13,15 @@ import {
   type ExportJobIntakeAdapters,
 } from "../job/exportJobIntake";
 import {
+  attachQueueJob,
+  createQueuedExportJob,
+  recordSkippedBranches,
+  requestCancellation,
+} from "../job/exportJobLifecycle";
+import {
   clearLatestJobId,
-  createJob,
   getJob,
   getLatestJobId,
-  patchJob,
-  requestCancellation,
   setLatestJobId,
 } from "../job/jobStore";
 import type { ExportJob } from "../job/types";
@@ -34,9 +37,9 @@ const exportJobIntakeAdapters: ExportJobIntakeAdapters = {
   enumerateDescendantSourcePages: async (rootId, depth, hooks) =>
     await getDescendantIds(rootId, depth, hooks),
   createExportJob: async (accountId, jobId, input) =>
-    await createJob(accountId, jobId, input),
+    await createQueuedExportJob(accountId, jobId, input),
   recordSkippedBranches: async (accountId, jobId, skipped) =>
-    await patchJob(accountId, jobId, { skipped }),
+    await recordSkippedBranches(accountId, jobId, skipped),
   recordLatestExportJob: async (accountId, jobId) =>
     await setLatestJobId(accountId, jobId),
   scheduleExportJob: async (accountId, jobId) => {
@@ -46,7 +49,7 @@ const exportJobIntakeAdapters: ExportJobIntakeAdapters = {
     return { queueJobId };
   },
   attachQueueJob: async (accountId, jobId, queueJobId) =>
-    await patchJob(accountId, jobId, { queueJobId }),
+    await attachQueueJob(accountId, jobId, queueJobId),
 };
 
 interface StartExportJobPayload {
@@ -153,9 +156,13 @@ export function registerExportResolvers(resolver: Resolver): void {
         return { error: "Job not found." };
       }
       // Best-effort: stops the queue event if it hasn't started running yet. For a
-      // job that's already executing in job/consumer.ts, the cancelRequested flag
-      // set by requestCancellation above is what actually stops it.
-      if (job.queueJobId) {
+      // job that's already executing in job/consumer.ts, the lifecycle-owned
+      // cancelRequested flag is what actually stops it.
+      if (
+        job.cancelRequested &&
+        (job.status === "queued" || job.status === "running") &&
+        job.queueJobId
+      ) {
         try {
           await exportQueue.getJob(job.queueJobId).cancel();
         } catch (exc) {

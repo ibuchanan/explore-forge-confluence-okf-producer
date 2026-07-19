@@ -65,6 +65,17 @@ export type JobStage =
 
 export type JobStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
+export type JobProgressStage = Exclude<
+  JobStage,
+  "ready" | "failed" | "cancelled"
+>;
+
+export interface ExportJobProgress {
+  stage?: JobProgressStage;
+  exportedCount?: number;
+  warnings?: SkippedPage[];
+}
+
 export interface ExportJobInput {
   rootUrl: string;
   rootId: string;

@@ -14,7 +14,7 @@ import { exportCancelled, exportFailed } from "./errors";
 import type {
   BundlePageMap,
   ConfluencePage,
-  ExportJob,
+  ExportJobProgress,
   SkippedPage,
 } from "./types";
 
@@ -33,7 +33,7 @@ export interface PipelineInput {
 }
 
 export interface PipelineHooks {
-  onProgress: (patch: Partial<ExportJob>) => void;
+  onProgress: (progress: ExportJobProgress) => void | Promise<void>;
   isCancelled: () => boolean | Promise<boolean>;
 }
 
@@ -55,7 +55,7 @@ export async function run(
   const skipped: SkippedPage[] = [...initialSkipped];
   const pages: BundlePageMap = new Map();
 
-  onProgress({ stage: "fetching-pages", exportedCount: 0 });
+  await onProgress({ stage: "fetching-pages", exportedCount: 0 });
   for (let i = 0; i < pageIds.length; i += 1) {
     if (await isCancelled()) {
       return exportCancelled();
@@ -80,7 +80,7 @@ export async function run(
     }
     const isLast = i === pageIds.length - 1;
     if (isLast || (i + 1) % PROGRESS_REPORT_INTERVAL === 0) {
-      onProgress({ exportedCount: pages.size, warnings: [...skipped] });
+      await onProgress({ exportedCount: pages.size, warnings: [...skipped] });
     }
   }
 
@@ -102,7 +102,7 @@ export async function run(
     idToPath.set(id, page.conceptPath);
   }
 
-  onProgress({ stage: "converting-markdown" });
+  await onProgress({ stage: "converting-markdown" });
   const spaceKeyMap = new Map<string, string>();
   for (const page of pages.values()) {
     if (!spaceKeyMap.has(page.spaceId)) {
@@ -162,7 +162,7 @@ export async function run(
     renderLog(rootPage, depth, pages.size, skipped, exportedAt.slice(0, 10)),
   );
 
-  onProgress({ stage: "building-archive" });
+  await onProgress({ stage: "building-archive" });
   const zipResult = await buildZipBuffer(bundleSlug, files);
   return zipResult.map((zipBuffer) => ({
     zipBuffer,

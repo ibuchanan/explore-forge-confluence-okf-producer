@@ -1,10 +1,14 @@
 import { ok } from "@forge-ahead/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getJob,
   isCancellationRequested,
-  patchJob,
-} from "../../src/job/jobStore";
+  markCancelled,
+  markFailed,
+  markReady,
+  markRunning,
+  recordProgress,
+} from "../../src/job/exportJobLifecycle";
+import { getJob } from "../../src/job/jobStore";
 import { run } from "../../src/job/pipeline";
 import type { ExportJob } from "../../src/job/types";
 
@@ -16,8 +20,14 @@ vi.mock("@forge/api", () => ({
 }));
 vi.mock("../../src/job/jobStore", () => ({
   getJob: vi.fn(),
-  patchJob: vi.fn(),
+}));
+vi.mock("../../src/job/exportJobLifecycle", () => ({
+  markRunning: vi.fn(),
+  recordProgress: vi.fn(),
   isCancellationRequested: vi.fn(),
+  markReady: vi.fn(),
+  markCancelled: vi.fn(),
+  markFailed: vi.fn(),
 }));
 vi.mock("../../src/job/pipeline", () => ({ run: vi.fn() }));
 vi.mock("@forge/object-store", () => ({
@@ -47,9 +57,13 @@ const baseJob: ExportJob = {
 
 beforeEach(() => {
   vi.mocked(getJob).mockReset().mockResolvedValue(ok(baseJob));
-  vi.mocked(patchJob).mockReset().mockResolvedValue(ok(baseJob));
+  vi.mocked(markRunning).mockReset().mockResolvedValue(ok(baseJob));
+  vi.mocked(recordProgress).mockReset().mockResolvedValue(ok(baseJob));
   vi.mocked(run).mockReset();
   vi.mocked(isCancellationRequested).mockReset().mockResolvedValue(ok(false));
+  vi.mocked(markReady).mockReset().mockResolvedValue(ok(baseJob));
+  vi.mocked(markCancelled).mockReset().mockResolvedValue(ok(baseJob));
+  vi.mocked(markFailed).mockReset().mockResolvedValue(ok(baseJob));
   createUploadUrl
     .mockReset()
     .mockResolvedValue({ url: "https://upload.example.com/presigned" });
@@ -77,9 +91,7 @@ describe("exportConsumer", () => {
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
 
-    expect(patchJob).toHaveBeenCalledWith("account-1", "job-1", {
-      status: "running",
-    });
+    expect(markRunning).toHaveBeenCalledWith("account-1", "job-1");
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         pageIds: baseJob.pageIds,
@@ -91,15 +103,35 @@ describe("exportConsumer", () => {
       "https://upload.example.com/presigned",
       expect.objectContaining({ method: "PUT" }),
     );
-    expect(patchJob).toHaveBeenCalledWith(
-      "account-1",
-      "job-1",
-      expect.objectContaining({
-        status: "ready",
-        stage: "ready",
-        exportedCount: 3,
-      }),
-    );
+    expect(markReady).toHaveBeenCalledWith("account-1", "job-1", {
+      archiveKey: "exports/account-1/job-1/root.zip",
+      exportedCount: 3,
+      skipped: [],
+    });
+  });
+
+  it("records lifecycle progress reported by the pipeline", async () => {
+    const { exportConsumer } = await import("../../src/job/consumer");
+    vi.mocked(run).mockImplementation(async (_input, hooks) => {
+      await hooks.onProgress({
+        stage: "converting-markdown",
+        exportedCount: 2,
+        warnings: [{ id: "3", title: null, reason: "410 Gone" }],
+      });
+      return ok({
+        zipBuffer: Buffer.from("zip-bytes"),
+        exportedCount: 2,
+        skipped: [],
+      });
+    });
+
+    await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
+
+    expect(recordProgress).toHaveBeenCalledWith("account-1", "job-1", {
+      stage: "converting-markdown",
+      exportedCount: 2,
+      warnings: [{ id: "3", title: null, reason: "410 Gone" }],
+    });
   });
 
   it("marks the job cancelled without uploading when the pipeline is cancelled", async () => {
@@ -109,10 +141,7 @@ describe("exportConsumer", () => {
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
 
-    expect(patchJob).toHaveBeenCalledWith("account-1", "job-1", {
-      status: "cancelled",
-      stage: "cancelled",
-    });
+    expect(markCancelled).toHaveBeenCalledWith("account-1", "job-1");
     expect(forgeFetch).not.toHaveBeenCalled();
   });
 
@@ -125,11 +154,11 @@ describe("exportConsumer", () => {
 
     await exportConsumer({ body: { accountId: "account-1", jobId: "job-1" } });
 
-    expect(patchJob).toHaveBeenCalledWith("account-1", "job-1", {
-      status: "failed",
-      stage: "failed",
-      errorMessage: "Root page read failed: 403 Forbidden",
-    });
+    expect(markFailed).toHaveBeenCalledWith(
+      "account-1",
+      "job-1",
+      "Root page read failed: 403 Forbidden",
+    );
   });
 
   it("does nothing when the job record is missing", async () => {
@@ -140,7 +169,7 @@ describe("exportConsumer", () => {
       body: { accountId: "account-1", jobId: "missing" },
     });
 
-    expect(patchJob).not.toHaveBeenCalled();
+    expect(markRunning).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
 });
