@@ -1,5 +1,7 @@
 # Confluence OKF Producer
 
+[![Listed on BundleDex](https://bundledex.net/badge.svg)](https://bundledex.net/bundles/explore-forge-confluence-okf-producer/)
+
 [On June 12, 2026, Google announced](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing):
 > [the Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf),
 > an open specification that formalizes the
