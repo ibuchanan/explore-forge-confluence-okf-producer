@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fetch as forgeFetch } from "@forge/api";
 import objectStore from "@forge/object-store";
 import { ok, type ProblemDetails, ResultAsync } from "@forge-ahead/errors";
 import { createForgeLogger } from "@forge-ahead/logging";
@@ -30,6 +31,7 @@ function uploadArchive(
   const { zipBuffer, exportedCount, skipped } = pipeline;
   const checksum = createHash("sha256").update(zipBuffer).digest("base64");
   const archiveKey = `exports/${accountId}/${jobId}/${job.bundleSlug}.zip`;
+  const archiveBody = new Uint8Array(zipBuffer).buffer;
 
   return ResultAsync.fromPromise(
     objectStore.createUploadUrl({
@@ -49,10 +51,10 @@ function uploadArchive(
       return exportFailed("Could not create an archive upload URL.");
     }
     return ResultAsync.fromPromise(
-      fetch(uploadUrl.url, {
+      forgeFetch(uploadUrl.url, {
         method: "PUT",
         headers: { "content-type": "application/zip" },
-        body: new Uint8Array(zipBuffer),
+        body: archiveBody,
       }),
       (exc) =>
         exportFailed(

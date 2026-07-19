@@ -9,7 +9,11 @@ import { run } from "../../src/job/pipeline";
 import type { ExportJob } from "../../src/job/types";
 
 const createUploadUrl = vi.fn();
+const forgeFetch = vi.fn();
 
+vi.mock("@forge/api", () => ({
+  fetch: forgeFetch,
+}));
 vi.mock("../../src/job/jobStore", () => ({
   getJob: vi.fn(),
   patchJob: vi.fn(),
@@ -49,14 +53,15 @@ beforeEach(() => {
   createUploadUrl
     .mockReset()
     .mockResolvedValue({ url: "https://upload.example.com/presigned" });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" }),
-  );
+  forgeFetch.mockReset().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+  });
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("exportConsumer", () => {
@@ -82,7 +87,7 @@ describe("exportConsumer", () => {
       }),
       expect.anything(),
     );
-    expect(fetch).toHaveBeenCalledWith(
+    expect(forgeFetch).toHaveBeenCalledWith(
       "https://upload.example.com/presigned",
       expect.objectContaining({ method: "PUT" }),
     );
@@ -108,7 +113,7 @@ describe("exportConsumer", () => {
       status: "cancelled",
       stage: "cancelled",
     });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(forgeFetch).not.toHaveBeenCalled();
   });
 
   it("marks the job failed with the error message when the pipeline fails", async () => {
